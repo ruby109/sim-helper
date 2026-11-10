@@ -56,8 +56,10 @@ public struct Workspace: Codable, Equatable {
 
     public func record(in paths: Paths) throws {
         let dir = directory(in: paths)
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        try JSONEncoder().encode(self).write(to: URL(fileURLWithPath: dir + "/workspace.json"), options: .atomic)
+        try attempt(.stateCorrupt, "Could not record the workspace in \(dir)") {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try JSONEncoder().encode(self).write(to: URL(fileURLWithPath: dir + "/workspace.json"), options: .atomic)
+        }
     }
 
     /// Every workspace with recorded state, including ones whose worktree is gone.

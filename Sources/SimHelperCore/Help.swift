@@ -3,7 +3,7 @@ import Foundation
 /// The help text, kept as data so `--json` can return it and tests can check it
 /// against the error codes and flags the CLI actually has.
 public enum Help {
-    public static let version = "0.1.2"
+    public static let version = "0.1.3"
 
     public struct Option: Encodable, Equatable {
         public var flag: String
@@ -24,7 +24,7 @@ public enum Help {
 
     public struct ErrorEntry: Encodable, Equatable {
         public var code: String
-        public var exitCode: String
+        public var exitCode: Int32
         public var meaning: String
         public var action: String
     }
@@ -34,8 +34,9 @@ public enum Help {
             command: "env",
             summary: "Show this worktree's paths, simulator, and toolchain",
             usage: "sim-helper env [--json]",
-            output: "Text, or JSON with developerDir, xcode, swiftCaching, compilationCacheSupported, simslim, workspace, derivedData, device, and home. workspace and device are null outside a worktree or before `sim acquire`.",
+            output: "Text, or JSON with developerDir, xcode, swiftCaching, compilationCacheSupported, simslim, workspace, derivedData, device, and home. workspace and derivedData are null outside a worktree; device is null until a simulator is allocated.",
             errors: ["SIMH_NO_XCODE", "SIMH_STATE_CORRUPT"],
+            notes: ["The cheap way to get this worktree's simulator: device.udid. It does not touch the simulator."],
             examples: ["sim-helper env --json"]),
         Command(
             command: "sim acquire",
@@ -49,11 +50,13 @@ public enum Help {
                 Option(flag: "--slim-except", value: "<list>", summary: "SimSlim categories to keep, e.g. push,storekit; `simslim profiles` lists them"),
             ],
             output: "The simulator's UDID. With --json, the device record: udid, name, deviceType, runtime, state, workspace, slimmed, parkedAt.",
-            errors: ["SIMH_NOT_IN_GIT_REPO", "SIMH_NO_RUNTIME", "SIMH_NO_DEVICE_TYPE", "SIMH_SIMSLIM_MISSING", "SIMH_BOOT_STUCK", "SIMH_SIMCTL_FAILED"],
+            errors: ["SIMH_NOT_IN_GIT_REPO", "SIMH_NO_RUNTIME", "SIMH_NO_DEVICE_TYPE", "SIMH_SIMSLIM_MISSING", "SIMH_BOOT_STUCK", "SIMH_WORKSPACE_BUSY", "SIMH_SIMCTL_FAILED", "SIMH_STATE_CORRUPT"],
             notes: [
-                "A worktree gets the same simulator every time. The first acquire creates, boots, and slims it, which can take a few minutes; later ones take seconds.",
+                "A worktree gets the same simulator every time. The first acquire creates, boots, slims, and test-launches it, which can take a few minutes. Later calls on a booted simulator return in seconds without touching it.",
                 "Reuses a parked simulator with the same device type and runtime before creating a new one.",
-                "Device type and runtime only apply when the simulator is allocated; to change them, run `release` first.",
+                "A different --device-type or --runtime parks the current simulator and switches to a matching one.",
+                "Switching or slimming reboots the simulator, so it is refused with SIMH_WORKSPACE_BUSY while a build runs in this worktree.",
+                "A simulator that cannot launch anything is discarded (SIMH_BOOT_STUCK); the next acquire creates a new one.",
             ],
             examples: [
                 "sim-helper sim acquire",
@@ -80,11 +83,12 @@ public enum Help {
             options: [
                 Option(flag: "--no-cache", summary: "Build without the shared compilation cache"),
             ],
-            output: "xcodebuild's output streams to stderr and to a log file. On success: derivedData, udid, log, compilationCache, cacheActivity {hits, cacheableTasks}, and swiftTargetsWithoutExplicitModules.",
-            errors: ["SIMH_BUILD_FAILED", "SIMH_COMPILATION_CACHE_CORRUPT", "SIMH_WORKSPACE_BUSY", "SIMH_NOT_IN_GIT_REPO"],
+            output: "xcodebuild's output streams to stderr and to a log file. On success: workspace, derivedData, udid, log, compilationCache, cacheActivity {hits, cacheableTasks}, and swiftTargetsWithoutExplicitModules. A failed build exits 1 with SIMH_BUILD_FAILED and xcodebuild's own status in xcodebuildStatus.",
+            errors: ["SIMH_BUILD_FAILED", "SIMH_COMPILATION_CACHE_CORRUPT", "SIMH_NOT_IN_GIT_REPO", "SIMH_NO_RUNTIME", "SIMH_NO_DEVICE_TYPE", "SIMH_SIMCTL_FAILED", "SIMH_STATE_CORRUPT"],
             notes: [
                 "Adds -derivedDataPath and -destination for this worktree unless you pass them. Without a simulator, it allocates one but leaves booting to xcodebuild, so it is not slimmed or verified: run `sim acquire` first.",
                 "Everything after -- goes to xcodebuild unchanged, including any --json. With -list, nothing is added.",
+                "Interrupting it (SIGINT, SIGTERM, SIGHUP) stops xcodebuild and waits for it to exit before sim-helper exits.",
             ],
             examples: [
                 "sim-helper build -- -scheme App build",
@@ -112,11 +116,12 @@ public enum Help {
             command: "release",
             summary: "Park the worktree's simulator and delete its DerivedData",
             usage: "sim-helper release [<path>] [--json]",
-            output: "The workspace id, the parked UDID, and deleted paths. With --json: {workspace, parked, deleted}.",
-            errors: ["SIMH_WORKSPACE_BUSY", "SIMH_UNKNOWN_WORKSPACE", "SIMH_DELETE_FAILED"],
+            output: "What was released. With --json: {workspace, parked (UDID), removed (the worktree's state directory, with its DerivedData), deleted (UDIDs of parked simulators evicted over the limit), deleteFailures}.",
+            errors: ["SIMH_WORKSPACE_BUSY", "SIMH_UNKNOWN_WORKSPACE", "SIMH_DELETE_FAILED", "SIMH_STATE_CORRUPT"],
             notes: [
                 "Run it before removing a worktree. <path> defaults to the current worktree and may be one that was already removed.",
-                "Parked simulators keep their installed apps; up to SIM_HELPER_MAX_PARKED are kept for reuse.",
+                "Refused with SIMH_WORKSPACE_BUSY while a build or `sim acquire` runs in the worktree.",
+                "Parked simulators keep their installed apps; up to SIM_HELPER_MAX_PARKED are kept for reuse. An evicted one that cannot be deleted is listed in deleteFailures and does not fail the release; `prune` retries it.",
             ],
             examples: ["sim-helper release", "sim-helper release ../feature-x"]),
         Command(
@@ -129,22 +134,23 @@ public enum Help {
     ]
 
     public static let errors: [ErrorEntry] = [
-        ErrorEntry(code: "SIMH_USAGE", exitCode: "64", meaning: "Unknown command or option, or a missing value", action: "Use `available` or the suggestion in the message; `sim-helper help <command>` lists options"),
-        ErrorEntry(code: "SIMH_NO_XCODE", exitCode: "1", meaning: "No usable Xcode", action: "Install Xcode 26 or later, or set DEVELOPER_DIR to its Contents/Developer"),
-        ErrorEntry(code: "SIMH_NOT_IN_GIT_REPO", exitCode: "1", meaning: "The current directory is not in a git worktree", action: "Run the command inside the worktree"),
-        ErrorEntry(code: "SIMH_NO_RUNTIME", exitCode: "1", meaning: "No installed iOS runtime matches --runtime", action: "Pick one from `available`, or install one with `xcodebuild -downloadPlatform iOS`"),
-        ErrorEntry(code: "SIMH_NO_DEVICE_TYPE", exitCode: "1", meaning: "The runtime does not support --device-type", action: "Pick one from `available`, or run `sim targets`"),
-        ErrorEntry(code: "SIMH_SIMSLIM_MISSING", exitCode: "1", meaning: "SimSlim is not installed", action: "`brew install mobai-app/tap/simslim`, or pass --no-slim"),
-        ErrorEntry(code: "SIMH_BOOT_STUCK", exitCode: "1", meaning: "The simulator reports booted but cannot launch a process", action: "Usually memory pressure or too many first boots at once; wait, then retry. Deleting the UDID in the message makes the next acquire create a new one"),
-        ErrorEntry(code: "SIMH_SIMCTL_FAILED", exitCode: "1", meaning: "A simctl command failed or timed out", action: "Read the message; retry once, then check `xcrun simctl list`"),
-        ErrorEntry(code: "SIMH_BUILD_FAILED", exitCode: "xcodebuild's", meaning: "An ordinary build or test failure", action: "Read the log at the path in `remedy`"),
-        ErrorEntry(code: "SIMH_COMPILATION_CACHE_CORRUPT", exitCode: "75", meaning: "The cache was corrupt and has been emptied", action: "Run the same command again; it will be a cold build"),
-        ErrorEntry(code: "SIMH_COMPILATION_CACHE_CORRUPT", exitCode: "1", meaning: "The cache is corrupt but other builds are using it", action: "Wait for them, run `sim-helper cache clear`, then rerun"),
-        ErrorEntry(code: "SIMH_COMPILATION_CACHE_BUSY", exitCode: "1", meaning: "A build is using the cache, so it was not cleared", action: "Retry after the build finishes"),
-        ErrorEntry(code: "SIMH_WORKSPACE_BUSY", exitCode: "1", meaning: "A build is running in this worktree", action: "Retry after it finishes"),
-        ErrorEntry(code: "SIMH_UNKNOWN_WORKSPACE", exitCode: "1", meaning: "No state is recorded for that removed worktree", action: "Nothing to release; `prune` cleans up anything left"),
-        ErrorEntry(code: "SIMH_DELETE_FAILED", exitCode: "1", meaning: "A simulator or directory could not be deleted; its record was kept", action: "Run `sim-helper prune` to retry"),
-        ErrorEntry(code: "SIMH_STATE_CORRUPT", exitCode: "1", meaning: "State under SIM_HELPER_HOME could not be read or locked", action: "Read the message; check permissions on SIM_HELPER_HOME"),
+        ErrorEntry(code: "SIMH_USAGE", exitCode: 64, meaning: "Unknown command or option, or a missing value", action: "Use `available` or the suggestion in the message; `sim-helper help <command>` lists options"),
+        ErrorEntry(code: "SIMH_NO_XCODE", exitCode: 1, meaning: "No usable Xcode", action: "Install Xcode 26 or later, or set DEVELOPER_DIR to its Contents/Developer"),
+        ErrorEntry(code: "SIMH_NOT_IN_GIT_REPO", exitCode: 1, meaning: "The current directory is not in a git worktree", action: "Run the command inside the worktree"),
+        ErrorEntry(code: "SIMH_NO_RUNTIME", exitCode: 1, meaning: "No installed iOS runtime matches --runtime", action: "Pick one from `available`, or install one with `xcodebuild -downloadPlatform iOS`"),
+        ErrorEntry(code: "SIMH_NO_DEVICE_TYPE", exitCode: 1, meaning: "The runtime does not support --device-type", action: "Pick one from `available`, or run `sim targets`"),
+        ErrorEntry(code: "SIMH_SIMSLIM_MISSING", exitCode: 1, meaning: "SimSlim is not installed", action: "`brew install mobai-app/tap/simslim`, or pass --no-slim"),
+        ErrorEntry(code: "SIMH_BOOT_STUCK", exitCode: 1, meaning: "The simulator reports booted but cannot launch a process, so it was discarded", action: "Usually memory pressure or too many first boots at once. Wait, then run `sim acquire` once more; it creates a new simulator"),
+        ErrorEntry(code: "SIMH_SIMCTL_FAILED", exitCode: 1, meaning: "A simctl command failed or timed out", action: "Read the message; retry once, then check `xcrun simctl list`"),
+        ErrorEntry(code: "SIMH_BUILD_FAILED", exitCode: 1, meaning: "An ordinary build or test failure; xcodebuild's own status is in xcodebuildStatus", action: "Read the log at the path in `remedy`"),
+        ErrorEntry(code: "SIMH_COMPILATION_CACHE_CORRUPT", exitCode: 75, meaning: "The cache was corrupt and has been emptied", action: "Run the same command again; it will be a cold build"),
+        ErrorEntry(code: "SIMH_COMPILATION_CACHE_CORRUPT", exitCode: 1, meaning: "The cache is corrupt but other builds are using it, so it was not emptied", action: "Wait for them, run `sim-helper cache clear`, then rerun"),
+        ErrorEntry(code: "SIMH_COMPILATION_CACHE_BUSY", exitCode: 1, meaning: "A build is using the cache, so it was not cleared", action: "Retry after the build finishes"),
+        ErrorEntry(code: "SIMH_WORKSPACE_BUSY", exitCode: 1, meaning: "A build or `sim acquire` is running in this worktree", action: "Retry after it finishes"),
+        ErrorEntry(code: "SIMH_UNKNOWN_WORKSPACE", exitCode: 1, meaning: "No state is recorded for that removed worktree", action: "Nothing to release; `prune` cleans up anything left"),
+        ErrorEntry(code: "SIMH_DELETE_FAILED", exitCode: 1, meaning: "A simulator or the worktree's state directory could not be deleted; simulator records are kept", action: "Run `sim-helper prune` to retry"),
+        ErrorEntry(code: "SIMH_STATE_CORRUPT", exitCode: 1, meaning: "State under SIM_HELPER_HOME could not be read, written, or locked", action: "Read the message; check that SIM_HELPER_HOME exists and is writable"),
+        ErrorEntry(code: "SIMH_UNEXPECTED", exitCode: 1, meaning: "An error sim-helper does not classify, likely a bug", action: "Report it with the message; retrying rarely helps"),
     ]
 
     public static let environment: [(name: String, summary: String)] = [
@@ -187,15 +193,17 @@ public enum Help {
 
         Typical flow, inside a git worktree:
           sim-helper sim acquire                     boot this worktree's simulator, print its UDID
+          sim-helper env --json                      its UDID later, without touching the simulator
           sim-helper build -- -scheme App test       adds -destination and -derivedDataPath for you
           sim-helper release                         before removing the worktree
 
         Commands:
         \(list.joined(separator: "\n"))
 
-        Every command accepts --json. Results go to stdout; progress and build output to stderr.
-        Failures exit non-zero with a stable SIMH_* code. With --json they print
-        {ok, code, message, remedy, available}. Exit 75: the cache was emptied, so rerun the command.
+        Every command accepts --json. Results go to stdout as {"ok": true, ...}; progress and build
+        output go to stderr. Failures exit non-zero with a stable SIMH_* code. With --json they print
+        {ok: false, code, message, remedy, available, exitCode, xcodebuildStatus}.
+        Exit 75: the cache was emptied, so rerun the command.
 
         On a 16 GB Mac, 2-3 simulators at once were stable; acquiring 4 together made some fail.
 

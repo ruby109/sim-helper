@@ -77,7 +77,7 @@ public struct Builder {
                 claim = nil
                 throw handleCorruption(corruption, cache: cache)
             }
-            throw HelperError(.buildFailed, "xcodebuild exited with status \(result.status).", remedy: "Full output: \(logPath)", exitCode: result.status == 0 ? 1 : result.status)
+            throw HelperError(.buildFailed, "xcodebuild exited with status \(result.status).", remedy: "Full output: \(logPath)", xcodebuildStatus: result.status)
         }
         return BuildResult(
             workspace: workspace.id, derivedData: derivedData, udid: udid, log: logPath,
@@ -118,13 +118,14 @@ public struct WorkspaceCleaner {
 
     public func release(_ workspace: Workspace) throws -> ReleaseReport {
         guard let lock = try FileLock.tryAcquire(paths.workspaceLock(workspace.id), .exclusive) else {
-            throw HelperError(.workspaceBusy, "A build is running in \(workspace.root).", remedy: "Retry when it has finished.")
+            throw HelperError(.workspaceBusy, "A build or `sim acquire` is running in \(workspace.root).", remedy: "Retry when it has finished.")
         }
         defer { lock.release() }
-        let report = try devices.releaseDevice(of: workspace)
+        var report = try devices.releaseDevice(of: workspace)
         let directory = workspace.directory(in: paths)
         if FileManager.default.fileExists(atPath: directory) {
-            try FileManager.default.removeItem(atPath: directory)
+            try attempt(.deleteFailed, "Could not delete \(directory)") { try FileManager.default.removeItem(atPath: directory) }
+            report.removed = directory
         }
         return report
     }

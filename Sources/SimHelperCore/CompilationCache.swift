@@ -17,28 +17,40 @@ public struct CompilationCache {
     }
 
     public func claim() throws -> FileLock {
-        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try attempt(.stateCorrupt, "Could not create \(directory)") {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        }
         return try FileLock.acquire(paths.compilationCacheLock, .shared)
     }
 
     public func status() throws -> Status {
+        // Probe and let go at once: sizing a large cache takes a while, and holding
+        // the exclusive lock meanwhile would block builds and fail clears as busy.
         let probe = try FileLock.tryAcquire(paths.compilationCacheLock, .exclusive)
-        return Status(path: directory, bytes: Self.size(of: directory), inUse: probe == nil)
+        let inUse = probe == nil
+        probe?.release()
+        return Status(path: directory, bytes: Self.size(of: directory), inUse: inUse)
     }
 
     /// Empties the cache. Throws `cacheBusy` while any build holds its claim.
     public func clear() throws {
-        guard let lock = try FileLock.tryAcquire(paths.compilationCacheLock, .exclusive) else {
-            throw HelperError(.cacheBusy, "A build is using the compilation cache at \(directory).", remedy: "Retry when the build has finished.")
-        }
-        defer { lock.release() }
-        // Rename first so a crash mid-delete cannot leave a half-empty cache in use.
         let fm = FileManager.default
-        let trash = "\(directory).trash-\(getpid())"
-        if fm.fileExists(atPath: directory) { try fm.moveItem(atPath: directory, toPath: trash) }
-        try fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        do {
+            guard let lock = try FileLock.tryAcquire(paths.compilationCacheLock, .exclusive) else {
+                throw HelperError(.cacheBusy, "A build is using the compilation cache at \(directory).", remedy: "Retry when the build has finished.")
+            }
+            defer { lock.release() }
+            // Rename first so a crash mid-delete cannot leave a half-empty cache in use.
+            // Only the rename needs the lock; deleting gigabytes must not block builds.
+            try attempt(.stateCorrupt, "Could not empty \(directory)") {
+                if fm.fileExists(atPath: directory) { try fm.moveItem(atPath: directory, toPath: "\(directory).trash-\(getpid())") }
+                try fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            }
+        }
+        // Includes any left by an earlier clear that crashed. Another clear may be
+        // deleting the same ones, so a failure here is not an error.
         for name in (try? fm.contentsOfDirectory(atPath: paths.home)) ?? [] where name.hasPrefix("compilation-cache.trash-") {
-            try fm.removeItem(atPath: "\(paths.home)/\(name)")
+            try? fm.removeItem(atPath: "\(paths.home)/\(name)")
         }
     }
 

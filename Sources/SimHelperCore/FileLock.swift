@@ -32,8 +32,10 @@ public final class FileLock {
     }
 
     private static func open(_ path: String, _ mode: Mode, blocking: Bool) throws -> FileLock? {
-        try FileManager.default.createDirectory(
-            atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        let directory = (path as NSString).deletingLastPathComponent
+        try attempt(.stateCorrupt, "Could not create \(directory)") {
+            try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        }
         // O_CLOEXEC: a daemon xcodebuild leaves running must not inherit the claim.
         let fd = Darwin.open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
         guard fd >= 0 else {

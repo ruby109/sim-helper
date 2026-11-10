@@ -74,17 +74,18 @@ Use sim-helper for simulator builds and tests. Run every command inside your wor
 
 **帮助。** `sim-helper help` 给出典型流程、命令、并发上限和环境变量。`help <command>` 列出单个命令的选项、输出字段、错误码和示例，`help errors` 列出所有错误码，两者都支持 `--json`。拼错时会给建议，例如 `Unknown command 'sim aquire'. Did you mean 'sim acquire'?`
 
-**错误码。** 失败时返回稳定的错误码，加 `--json` 时输出 `{ok, code, message, remedy, available}`：
+**错误码。** 失败时返回稳定的错误码。加 `--json` 时，成功结果带 `"ok": true`，失败输出 `{ok: false, code, message, remedy, available, exitCode, xcodebuildStatus}`：
 
 | 错误码 | 退出码 | 处理方式 |
 | --- | --- | --- |
 | `SIMH_COMPILATION_CACHE_CORRUPT` | 75 | 缓存已清空，重跑同一命令（这次是冷构建） |
 | `SIMH_COMPILATION_CACHE_CORRUPT` | 1 | 缓存损坏，但其他构建还在用，没有清空。等它们结束后运行 `cache clear` 再重跑 |
 | `SIMH_COMPILATION_CACHE_BUSY` | 1 | 有构建在用缓存，稍后重试 |
-| `SIMH_WORKSPACE_BUSY` | 1 | 这个 worktree 正在构建，稍后再 `release` |
-| `SIMH_BUILD_FAILED` | xcodebuild 的退出码 | 普通构建失败，完整日志在 `remedy` 给出的路径 |
-| `SIMH_BOOT_STUCK` | 1 | 模拟器显示已启动，但无法启动进程，先检查内存压力 |
-| `SIMH_SIMSLIM_MISSING` | 1 | 运行 `scripts/install.sh`，或加 `--no-slim` 使用完整的模拟器 |
+| `SIMH_WORKSPACE_BUSY` | 1 | 这个 worktree 正在构建或执行 `sim acquire`，稍后重试 |
+| `SIMH_BUILD_FAILED` | 1 | 普通构建失败。xcodebuild 自己的退出码在 `xcodebuildStatus`，完整日志在 `remedy` 给出的路径 |
+| `SIMH_BOOT_STUCK` | 1 | 模拟器显示已启动但无法启动进程，已被丢弃。等内存压力下降后重新申请 |
+| `SIMH_SIMSLIM_MISSING` | 1 | 运行 `brew install mobai-app/tap/simslim`，或加 `--no-slim` 使用完整的模拟器 |
+| `SIMH_UNEXPECTED` | 1 | 未归类的错误，很可能是 bug，请反馈 |
 | `SIMH_DELETE_FAILED` | 1 | 记录已保留，运行 `prune` 重试 |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | 指定的版本或型号不可用，从 `available` 字段里选一个，或运行 `sim targets` |
 
@@ -95,9 +96,11 @@ Use sim-helper for simulator builds and tests. Run every command inside your wor
 **模拟器**
 
 - 只操作记录在 `devices.json` 里的模拟器。名字以 `simh-` 开头也不算，别的工具建的模拟器不会被碰。
-- 同一个 worktree 下次还用同一台。
+- 同一个 worktree 下次还用同一台。指定不同的型号或系统版本时，会停放当前这台并换成匹配的一台。
+- 同一 worktree 里的 `sim acquire`、构建和 `release` 通过锁协调：有构建或 acquire 在运行时，`release` 会被拒绝；有构建在运行时，切换或 slim 模拟器也会被拒绝。
 - `release` 后模拟器被停放，供其他 worktree 复用，最多留 3 台（`SIM_HELPER_MAX_PARKED`），超出时删最旧的。
-- `sim acquire` 会实际启动一个进程来验证模拟器可用，卡住时重启一次。
+- `sim acquire` 会在模拟器刚启动时实际拉起一个进程来验证可用，卡住时重启一次；仍然不行就丢弃这台模拟器。已经启动的模拟器不会再验证，避免打断上面正在跑的 UI 测试。
+- 删除超出停放上限的模拟器是尽力而为：失败会记在 `deleteFailures`，由 `prune` 重试，不会导致 `release` 失败。
 - `sim acquire` 会用 SimSlim 精简模拟器；没装 SimSlim 时直接报错，不会创建任何东西。`--no-slim` 可以跳过。SimSlim 执行失败（比如运行时太旧）只警告，不影响使用。
 
 **编译缓存**
@@ -148,7 +151,7 @@ slim 只需做一次，含重启约 12s。内存占用是 `simslim measure` 给�
 - **没有限制同时首次启动的数量。** 在 16GB 的 Mac 上同时申请 4 台，有 2 台报 `SIMH_BOOT_STUCK`。请错开申请，或者重试。
 - **`--no-boot` 和 `build` 不会触发 SimSlim。** 要 slim 需先运行一次 `sim acquire`。`sim acquire` 失败后由 `build` 启动的模拟器不会被 slim。
 - **停放的模拟器不清理 app 数据。** 换 worktree 后可能残留上一个 worktree 安装的 app，需要干净环境时请自己卸载。没有自动抹掉，是因为 erase 会让 SimSlim 的设置失效。
-- **`kill -9` 杀掉 sim-helper 时，xcodebuild 可能继续运行，而它的缓存锁已释放。** SIGINT、SIGTERM、SIGHUP 会转发给 xcodebuild。
+- **`kill -9` 杀掉 sim-helper 时，xcodebuild 可能继续运行，而它的缓存锁已释放。** SIGINT、SIGTERM、SIGHUP 会转发给 xcodebuild，sim-helper 会等它退出后再退出。
 - **SimSlim 需要 iOS 18 或更新的运行时**，更旧的运行时重启后设置不保留。
 
 ## 开发

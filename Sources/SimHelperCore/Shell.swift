@@ -27,18 +27,27 @@ extension CommandRunner {
 }
 
 // The pid signal handlers forward to. A killed helper must not leave xcodebuild
-// compiling with its claim on the compilation cache already released.
+// compiling with its claim on the compilation cache already released, so with a
+// child running the helper only forwards the signal and dies once the child exits.
 private var forwardedChildPid: pid_t = 0
+private var pendingSignal: Int32 = 0
 
 public func installSignalForwarding() {
     let handler: @convention(c) (Int32) -> Void = { sig in
-        if forwardedChildPid > 0 { kill(forwardedChildPid, sig) }
-        signal(sig, SIG_DFL)
-        raise(sig)
+        guard forwardedChildPid > 0 else { dieFromSignal(sig) }
+        pendingSignal = sig
+        kill(forwardedChildPid, sig)
     }
     signal(SIGINT, handler)
     signal(SIGTERM, handler)
     signal(SIGHUP, handler)
+}
+
+/// Exits the way the signal would have, so callers see the usual status.
+private func dieFromSignal(_ sig: Int32) -> Never {
+    signal(sig, SIG_DFL)
+    raise(sig)
+    _exit(128 + sig)
 }
 
 public struct ProcessRunner: CommandRunner {
@@ -96,6 +105,7 @@ public struct ProcessRunner: CommandRunner {
         process.waitUntilExit()
         killer?.cancel()
         forwardedChildPid = 0
+        if pendingSignal != 0 { dieFromSignal(pendingSignal) }
         // A daemon the tool spawned can inherit the pipe and hold it open forever.
         _ = eof.wait(timeout: .now() + 2)
         pipe.fileHandleForReading.readabilityHandler = nil
@@ -153,12 +163,22 @@ public enum DeveloperDirectory {
         }
         if let dir = selected(), hasXcodebuild(dir) { return dir }
         let apps = (try? FileManager.default.contentsOfDirectory(atPath: applicationsDir)) ?? []
+        // Ordered by the version inside each app: names lie, e.g. Xcode.app
+        // symlinked to an older install.
         let candidates = apps
             .filter { $0.hasPrefix("Xcode") && $0.hasSuffix(".app") }
-            .sorted { $0.localizedStandardCompare($1) == .orderedDescending }
-            .map { "\(applicationsDir)/\($0)/Contents/Developer" }
-        if let found = candidates.first(where: hasXcodebuild) { return found }
-        throw HelperError(.noXcode, "No Xcode found.", remedy: "Install Xcode or set DEVELOPER_DIR.")
+            .map { "\(applicationsDir)/\($0)" }
+            .filter { hasXcodebuild($0 + "/Contents/Developer") }
+            .compactMap { app in version(ofApp: app).map { (app, $0) } }
+        if let newest = candidates.max(by: { $0.1.compare($1.1, options: .numeric) == .orderedAscending }) {
+            return newest.0 + "/Contents/Developer"
+        }
+        throw HelperError(.noXcode, "No Xcode found.", remedy: "Install Xcode 26 or later, or set DEVELOPER_DIR to its Contents/Developer.")
+    }
+
+    static func version(ofApp app: String) -> String? {
+        guard let plist = NSDictionary(contentsOfFile: app + "/Contents/Info.plist") else { return nil }
+        return plist["CFBundleShortVersionString"] as? String
     }
 
     private static func hasXcodebuild(_ dir: String) -> Bool {

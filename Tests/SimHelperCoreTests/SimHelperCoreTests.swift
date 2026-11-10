@@ -60,6 +60,12 @@ final class FakeRunner: CommandRunner {
         case "delete":
             devices[sub[1]] = nil
             return CommandResult()
+        case "boot":
+            devices[sub[1]]?.state = "Booted"
+            return CommandResult()
+        case "shutdown":
+            devices[sub[1]]?.state = "Shutdown"
+            return CommandResult()
         case "launch":
             if launchFailures > 0 {
                 launchFailures -= 1
@@ -208,7 +214,9 @@ final class Sandbox {
         let a = try box.existingWorkspace("a")
         let first = try manager.acquire(a)
         box.runner.failing = ["delete"]
-        #expect(throws: HelperError.self) { try manager.releaseDevice(of: a) }
+        // A simulator that will not delete must not fail the release.
+        let report = try manager.releaseDevice(of: a)
+        #expect(report.parked == first.udid && report.deleted.isEmpty && report.deleteFailures.count == 1)
         #expect(try manager.list().map(\.state) == [.deleting])
         box.runner.failing = []
         #expect(try manager.retryPendingDeletes() == [first.udid])
@@ -236,6 +244,62 @@ final class Sandbox {
         box.runner.devices[first.udid] = nil
         let second = try box.manager().acquire(a)
         #expect(second.udid != first.udid)
+    }
+
+    @Test func switchingDeviceParksTheOldOneUnlessABuildIsRunning() throws {
+        let box = Sandbox()
+        let a = try box.existingWorkspace("a")
+        let manager = box.manager()
+        let first = try manager.acquire(a)
+        #expect(first.deviceType == "dt.18pro")
+
+        let building = try FileLock.acquire(box.paths.workspaceLock(a.id), .shared)
+        #expect(throws: HelperError.self) { try manager.acquire(a, AcquireOptions(deviceType: "iPhone 18", runtime: "27.2")) }
+        #expect(try manager.list().first { $0.udid == first.udid }?.state == .assigned)
+        building.release()
+
+        let second = try manager.acquire(a, AcquireOptions(deviceType: "iPhone 18", runtime: "27.2"))
+        #expect(second.udid != first.udid && second.deviceType == "dt.18")
+        #expect(try manager.list().first { $0.udid == first.udid }?.state == .parked)
+        #expect(box.runner.devices[first.udid]?.state == "Shutdown")
+    }
+
+    @Test func reacquiringABootedSimulatorDoesNotLaunchTheProbe() throws {
+        let box = Sandbox()
+        let a = try box.existingWorkspace("a")
+        _ = try box.manager().acquire(a)
+        let launches = box.runner.simctlCalls("launch").count
+        _ = try box.manager().acquire(a)
+        #expect(box.runner.simctlCalls("launch").count == launches)
+    }
+
+    @Test func buildAllocatesUnderItsOwnSharedLock() throws {
+        // build holds the workspace lock shared and then allocates; that must not
+        // need the lock exclusively.
+        let box = Sandbox()
+        let a = try box.existingWorkspace("a")
+        let building = try FileLock.acquire(box.paths.workspaceLock(a.id), .shared)
+        defer { building.release() }
+        let device = try box.manager().acquire(a, AcquireOptions(boot: false))
+        #expect(device.workspace == a.id)
+    }
+
+    @Test func stuckSimulatorIsDiscarded() throws {
+        let box = Sandbox()
+        let a = try box.existingWorkspace("a")
+        box.runner.launchFailures = 2
+        #expect(throws: HelperError.self) { try box.manager().acquire(a) }
+        #expect(try box.manager().list().isEmpty)
+        #expect(box.runner.devices.isEmpty)
+        box.runner.launchFailures = 0
+        let fresh = try box.manager().acquire(a)
+        #expect(fresh.udid == "UDID-2")
+    }
+
+    @Test func listDoesNotWriteTheRegistry() throws {
+        let box = Sandbox()
+        #expect(try box.manager().list().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: box.paths.registry))
     }
 
     @Test func stuckBootRestartsOnceThenFails() throws {
@@ -290,6 +354,9 @@ final class Sandbox {
         #expect(FileManager.default.fileExists(atPath: marker))
         #expect(try cache.status().inUse)
         claim.release()
+        try cache.clear()
+        // status must not keep holding the lock it probes with.
+        _ = try cache.status()
         try cache.clear()
         #expect(!FileManager.default.fileExists(atPath: marker))
         #expect(FileManager.default.fileExists(atPath: cache.directory))
@@ -402,7 +469,9 @@ final class Sandbox {
             Issue.record("expected failure")
         } catch let error as HelperError {
             #expect(error.code == .buildFailed)
-            #expect(error.exitCode == 65)
+            // Not xcodebuild's status: that could read as 64 (usage) or 75 (rerun).
+            #expect(error.exitCode == 1)
+            #expect(error.xcodebuildStatus == 65)
         }
         #expect(FileManager.default.fileExists(atPath: entry))
     }
@@ -479,7 +548,8 @@ final class Sandbox {
         let building = try FileLock.acquire(box.paths.workspaceLock(a.id), .shared)
         #expect(throws: HelperError.self) { try cleaner.release(a) }
         building.release()
-        _ = try cleaner.release(a)
+        let report = try cleaner.release(a)
+        #expect(report.removed == a.directory(in: box.paths))
         #expect(!FileManager.default.fileExists(atPath: a.directory(in: box.paths)))
     }
 
@@ -507,14 +577,17 @@ final class Sandbox {
         let box = Sandbox()
         let apps = box.home + "/Applications"
         let fm = FileManager.default
-        func app(_ name: String, xcodebuild: Bool) throws {
+        func app(_ name: String, version: String, xcodebuild: Bool = true) throws {
             let dir = "\(apps)/\(name)/Contents/Developer/usr/bin"
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             if xcodebuild { fm.createFile(atPath: dir + "/xcodebuild", contents: Data(), attributes: [.posixPermissions: 0o755]) }
+            NSDictionary(dictionary: ["CFBundleShortVersionString": version]).write(toFile: "\(apps)/\(name)/Contents/Info.plist", atomically: true)
         }
-        try app("Xcodes.app", xcodebuild: false)
-        try app("Xcode-13.3.1.app", xcodebuild: true)
-        try app("Xcode-27.2.0.app", xcodebuild: true)
+        try app("Xcodes.app", version: "99.0", xcodebuild: false)
+        try app("Xcode-9.4.app", version: "9.4")
+        try app("Xcode.app", version: "13.3.1")
+        try app("Xcode-27.2.0.app", version: "27.2")
+        try app("Xcode_16.4.app", version: "16.4")
         let dir = try DeveloperDirectory.resolve(environment: [:], selected: { "/Library/Developer/CommandLineTools" }, applicationsDir: apps)
         #expect(dir == "\(apps)/Xcode-27.2.0.app/Contents/Developer")
     }

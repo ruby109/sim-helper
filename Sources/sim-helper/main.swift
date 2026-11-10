@@ -16,7 +16,10 @@ struct Arguments {
 
     mutating func option(_ name: String) throws -> String? {
         guard let i = values.firstIndex(of: name) else { return nil }
-        guard i + 1 < values.count else { throw HelperError(.usage, "\(name) needs a value.", remedy: "Run `sim-helper help <command>` for its options.") }
+        // `--runtime --no-boot` is a missing value, not a runtime named --no-boot.
+        guard i + 1 < values.count, !values[i + 1].hasPrefix("--") else {
+            throw HelperError(.usage, "\(name) needs a value.", remedy: "Run `sim-helper help <command>` for its options.")
+        }
         let value = values[i + 1]
         values.removeSubrange(i...(i + 1))
         return value
@@ -38,12 +41,36 @@ let jsonEncoder: JSONEncoder = {
     return encoder
 }()
 
+/// With `json`, prints the value as an object with `ok: true`, so callers can
+/// branch on `ok` for every result, not only failures.
 func emit<T: Encodable>(_ value: T, json: Bool, text: (T) -> String) throws {
+    guard json else { return print(text(value)) }
+    var object = try JSONSerialization.jsonObject(with: try jsonEncoder.encode(value)) as? [String: Any] ?? [:]
+    object["ok"] = true
+    let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    print(String(decoding: data, as: UTF8.self))
+}
+
+func fail(_ error: HelperError, json: Bool) -> Never {
     if json {
-        print(String(decoding: try jsonEncoder.encode(value), as: UTF8.self))
+        struct Failure: Encodable {
+            var ok = false
+            var code: String
+            var message: String
+            var remedy: String?
+            var available: [String]?
+            var exitCode: Int32
+            var xcodebuildStatus: Int32?
+        }
+        let failure = Failure(code: error.code.rawValue, message: error.message, remedy: error.remedy, available: error.available,
+                              exitCode: error.exitCode, xcodebuildStatus: error.xcodebuildStatus)
+        print((try? jsonEncoder.encode(failure)).map { String(decoding: $0, as: UTF8.self) } ?? #"{"ok":false,"code":"SIMH_UNEXPECTED"}"#)
     } else {
-        print(text(value))
+        status("\(error.code.rawValue): \(error.message)")
+        if let remedy = error.remedy { status(remedy) }
+        if let available = error.available { status("Available: \(available.joined(separator: ", "))") }
     }
+    exit(error.exitCode)
 }
 
 func gigabytes(_ bytes: Int64) -> String { String(format: "%.2f GB", Double(bytes) / 1_000_000_000) }
@@ -58,6 +85,33 @@ struct EnvReport: Encodable {
     var derivedData: String?
     var device: OwnedDevice?
     var home: String
+
+    // Absent values are null rather than missing keys, as `help env` says.
+    func encode(to encoder: Encoder) throws {
+        enum Key: String, CodingKey { case developerDir, xcode, swiftCaching, compilationCacheSupported, simslim, workspace, derivedData, device, home }
+        var c = encoder.container(keyedBy: Key.self)
+        try c.encode(developerDir, forKey: .developerDir)
+        try c.encode(xcode, forKey: .xcode)
+        try c.encode(swiftCaching, forKey: .swiftCaching)
+        try c.encode(compilationCacheSupported, forKey: .compilationCacheSupported)
+        try c.encode(simslim, forKey: .simslim)
+        try c.encode(workspace, forKey: .workspace)
+        try c.encode(derivedData, forKey: .derivedData)
+        try c.encode(device, forKey: .device)
+        try c.encode(home, forKey: .home)
+    }
+}
+
+/// `path` made absolute with symlinks resolved, even when its tail no longer
+/// exists: the deepest existing ancestor is resolved and the rest appended.
+func resolvedPath(_ path: String) -> String {
+    var head = URL(fileURLWithPath: path).standardizedFileURL.path
+    var tail: [String] = []
+    while !FileManager.default.fileExists(atPath: head), head != "/" {
+        tail.insert((head as NSString).lastPathComponent, at: 0)
+        head = (head as NSString).deletingLastPathComponent
+    }
+    return ([realPath(head)] + tail).joined(separator: "/").replacingOccurrences(of: "//", with: "/")
 }
 
 struct DeviceList: Encodable { var devices: [OwnedDevice] }
@@ -187,8 +241,8 @@ func run(_ rawArguments: [String], json: Bool) throws {
         let workspace: Workspace
         if let path, !FileManager.default.fileExists(atPath: path) {
             // The worktree may already be removed, so git cannot be asked about it.
-            let absolute = URL(fileURLWithPath: path).standardizedFileURL.path
-            guard let known = Workspace.all(in: paths).first(where: { $0.root == absolute || $0.root == "/private" + absolute }) else {
+            let absolute = resolvedPath(path)
+            guard let known = Workspace.all(in: paths).first(where: { $0.root == absolute }) else {
                 throw HelperError(.unknownWorkspace, "No recorded workspace at \(path).")
             }
             workspace = known
@@ -196,7 +250,9 @@ func run(_ rawArguments: [String], json: Bool) throws {
             workspace = try Workspace.containing(path ?? cwd, runner: runner)
         }
         try emit(try cleaner.release(workspace), json: json) { r in
-            "released \(r.workspace)" + (r.parked.map { ", parked \($0)" } ?? "") + r.deleted.map { ", deleted \($0)" }.joined()
+            (["released \(r.workspace)"] + r.parked.map { ["parked \($0)"] }.orEmpty + r.removed.map { ["removed \($0)"] }.orEmpty
+                + r.deleted.map { "deleted simulator \($0)" } + r.deleteFailures.map { "could not delete simulator \($0); prune retries it" })
+                .joined(separator: "\n")
         }
 
     case "prune":
@@ -291,17 +347,11 @@ do {
         try run(arguments.values, json: json)
     }
 } catch let error as HelperError {
-    if json {
-        struct Failure: Encodable { var ok = false; var code: String; var message: String; var remedy: String?; var available: [String]? }
-        let failure = Failure(code: error.code.rawValue, message: error.message, remedy: error.remedy, available: error.available)
-        print(String(decoding: try jsonEncoder.encode(failure), as: UTF8.self))
-    } else {
-        status("\(error.code.rawValue): \(error.message)")
-        if let remedy = error.remedy { status(remedy) }
-        if let available = error.available { status("Available: \(available.joined(separator: ", "))") }
-    }
-    exit(error.exitCode)
+    fail(error, json: json)
 } catch {
-    status("error: \(error)")
-    exit(1)
+    fail(HelperError(.unexpected, "\(error)", remedy: "Likely a bug in sim-helper; report it with this message."), json: json)
+}
+
+extension Optional where Wrapped == [String] {
+    var orEmpty: [String] { self ?? [] }
 }

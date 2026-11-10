@@ -74,17 +74,18 @@ Use sim-helper for simulator builds and tests. Run every command inside your wor
 
 **Help.** `sim-helper help` gives the workflow, commands, limits, and environment variables. `help <command>` lists a command's options, output fields, errors, and examples, and `help errors` covers every error code. Both accept `--json`. Typos get a suggestion, such as `Unknown command 'sim aquire'. Did you mean 'sim acquire'?`
 
-**Errors.** Failures return stable error codes. With `--json`, the output is `{ok, code, message, remedy, available}`:
+**Errors.** Failures return stable error codes. With `--json`, successes include `"ok": true` and failures print `{ok: false, code, message, remedy, available, exitCode, xcodebuildStatus}`:
 
 | Code | Exit code | What to do |
 | --- | --- | --- |
 | `SIMH_COMPILATION_CACHE_CORRUPT` | 75 | The cache was cleared. Rerun the same command (it will be a cold build) |
 | `SIMH_COMPILATION_CACHE_CORRUPT` | 1 | The cache is corrupt but other builds are using it, so it was not cleared. Wait for them, run `cache clear`, then rerun |
 | `SIMH_COMPILATION_CACHE_BUSY` | 1 | A build is using the cache. Retry later |
-| `SIMH_WORKSPACE_BUSY` | 1 | This worktree is building. Run `release` later |
-| `SIMH_BUILD_FAILED` | xcodebuild's exit code | An ordinary build failure. The full log is at the path in `remedy` |
-| `SIMH_BOOT_STUCK` | 1 | The simulator reports booted but cannot launch a process. Check memory pressure first |
-| `SIMH_SIMSLIM_MISSING` | 1 | Run `scripts/install.sh`, or pass `--no-slim` to use a stock simulator |
+| `SIMH_WORKSPACE_BUSY` | 1 | A build or `sim acquire` is running in this worktree. Retry later |
+| `SIMH_BUILD_FAILED` | 1 | An ordinary build failure. xcodebuild's own status is in `xcodebuildStatus`; the full log is at the path in `remedy` |
+| `SIMH_BOOT_STUCK` | 1 | The simulator booted but could not launch a process, and was discarded. Wait for memory pressure to drop, then acquire again |
+| `SIMH_SIMSLIM_MISSING` | 1 | Run `brew install mobai-app/tap/simslim`, or pass `--no-slim` to use a stock simulator |
+| `SIMH_UNEXPECTED` | 1 | An unclassified error, likely a bug. Report it |
 | `SIMH_DELETE_FAILED` | 1 | The record was kept. Run `prune` to retry |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | The requested version or model is unavailable. Pick one from `available`, or run `sim targets` |
 
@@ -95,9 +96,11 @@ Use sim-helper for simulator builds and tests. Run every command inside your wor
 **Simulators**
 
 - sim-helper only touches simulators recorded in `devices.json`. A `simh-` name prefix is not enough, so simulators created by other tools are left alone.
-- A worktree gets the same simulator back next time.
+- A worktree gets the same simulator back next time. Asking for a different device type or runtime parks the current one and switches.
+- `sim acquire`, builds, and `release` in the same worktree coordinate through a lock: `release` is refused while a build or acquire runs, and switching or slimming a simulator is refused while a build runs.
 - `release` parks the simulator so another worktree can reuse it. Up to 3 are kept (`SIM_HELPER_MAX_PARKED`); beyond that, the oldest is deleted.
-- `sim acquire` launches a real process to confirm the simulator works, and restarts it once if it is stuck.
+- `sim acquire` launches a real process to confirm a newly booted simulator works, and restarts it once if it is stuck. A simulator that still cannot launch anything is discarded. An already booted simulator is not probed again, so a UI test running on it is not disturbed.
+- Deleting a simulator that is over the parking limit is best effort: a failure is reported in `deleteFailures` and retried by `prune`, and does not fail `release`.
 - `sim acquire` slims the simulator with SimSlim, and fails before creating anything if SimSlim is missing. `--no-slim` skips it. A SimSlim failure, such as on an older runtime, is only a warning.
 
 **Compilation cache**
@@ -148,7 +151,7 @@ All tests passed, including the UI test on slimmed simulators. With 4, two acqui
 - **First boots are not throttled.** Acquiring 4 simulators at once on a 16 GB Mac made 2 of them fail with `SIMH_BOOT_STUCK`. Stagger acquires, or retry.
 - **`--no-boot` and `build` do not run SimSlim.** Run `sim acquire` once to slim the simulator. A simulator that `build` boots after a failed acquire stays stock.
 - **Parked simulators keep their app data.** A worktree may inherit apps installed by the previous one; uninstall them if you need a clean state. They are not erased automatically because erasing undoes SimSlim's settings.
-- **If sim-helper is killed with `kill -9`, xcodebuild may keep running after its cache lock is released.** SIGINT, SIGTERM, and SIGHUP are forwarded to xcodebuild.
+- **If sim-helper is killed with `kill -9`, xcodebuild may keep running after its cache lock is released.** SIGINT, SIGTERM, and SIGHUP are forwarded to xcodebuild, and sim-helper waits for it to exit before exiting itself.
 - **SimSlim needs an iOS 18 or later runtime.** Older runtimes lose the settings on reboot.
 
 ## Development

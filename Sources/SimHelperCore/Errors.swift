@@ -18,6 +18,7 @@ public struct HelperError: Error, Equatable {
         case buildFailed = "SIMH_BUILD_FAILED"
         case deleteFailed = "SIMH_DELETE_FAILED"
         case stateCorrupt = "SIMH_STATE_CORRUPT"
+        case unexpected = "SIMH_UNEXPECTED"
     }
 
     public var code: Code
@@ -27,13 +28,22 @@ public struct HelperError: Error, Equatable {
     public var available: [String]?
     /// Process exit status to use when this error ends the command.
     public var exitCode: Int32
+    /// xcodebuild's own status, for build failures. Kept apart from `exitCode` so
+    /// it cannot collide with this tool's codes, such as 64 for usage or 75 for retry.
+    public var xcodebuildStatus: Int32?
 
-    public init(_ code: Code, _ message: String, remedy: String? = nil, available: [String]? = nil, exitCode: Int32? = nil) {
+    public init(_ code: Code, _ message: String, remedy: String? = nil, available: [String]? = nil, exitCode: Int32? = nil, xcodebuildStatus: Int32? = nil) {
         self.code = code
         self.message = message
         self.remedy = remedy
         self.available = available
         self.exitCode = exitCode ?? Self.defaultExitCode(code)
+        self.xcodebuildStatus = xcodebuildStatus
+    }
+
+    /// Wraps a filesystem or other system error so it still has a stable code.
+    public init(_ code: Code, _ action: String, underlying error: Error) {
+        self.init(code, "\(action): \((error as NSError).localizedDescription)")
     }
 
     private static func defaultExitCode(_ code: Code) -> Int32 {
@@ -43,5 +53,16 @@ public struct HelperError: Error, Equatable {
         case .cacheCorrupt: return 75
         default: return 1
         }
+    }
+}
+
+/// Runs `body`, giving any non-`HelperError` failure the code `code`.
+func attempt<T>(_ code: HelperError.Code, _ action: @autoclosure () -> String, _ body: () throws -> T) throws -> T {
+    do {
+        return try body()
+    } catch let error as HelperError {
+        throw error
+    } catch {
+        throw HelperError(code, action(), underlying: error)
     }
 }

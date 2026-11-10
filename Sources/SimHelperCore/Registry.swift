@@ -44,8 +44,10 @@ public struct Registry: Codable, Equatable {
     }
 
     func save(_ paths: Paths) throws {
-        try FileManager.default.createDirectory(atPath: paths.home, withIntermediateDirectories: true)
-        try encoder.encode(self).write(to: URL(fileURLWithPath: paths.registry), options: .atomic)
+        try attempt(.stateCorrupt, "Could not write \(paths.registry)") {
+            try FileManager.default.createDirectory(atPath: paths.home, withIntermediateDirectories: true)
+            try encoder.encode(self).write(to: URL(fileURLWithPath: paths.registry), options: .atomic)
+        }
     }
 }
 

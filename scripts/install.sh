@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 fail() { echo "error: $*" >&2; exit 1; }
 
 [[ "$(uname)" == Darwin ]] || fail "sim-helper only runs on macOS."
-command -v brew >/dev/null || fail "Homebrew is required to install SimSlim. See https://brew.sh"
+command -v simslim >/dev/null || command -v brew >/dev/null || fail "Homebrew is required to install SimSlim. See https://brew.sh"
 mkdir -p "$BIN_DIR" 2>/dev/null || true
 [[ -w "$BIN_DIR" ]] || fail "$BIN_DIR is not writable. Rerun with BIN_DIR set to a directory on your PATH, e.g. BIN_DIR=~/.local/bin $0"
 
@@ -32,3 +32,5 @@ case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "note: $BIN_DIR is not on your PATH." ;;
 esac
+echo "To give Claude Code the sim-helper skill:"
+echo "  mkdir -p ~/.claude/skills && ln -s \"$PWD/skills/sim-helper\" ~/.claude/skills/sim-helper"
