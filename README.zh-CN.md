@@ -8,15 +8,14 @@
 
 ## 安装
 
-需要 Xcode 26 或更新版本（Swift 编译缓存需要 Xcode 27 / Swift 6.4）。
+需要 Xcode 26 或更新版本，以及 [Homebrew](https://brew.sh)（Swift 编译缓存需要 Xcode 27 / Swift 6.4）。
 
 ```sh
-swift build -c release
-cp .build/release/sim-helper /usr/local/bin/   # 或任意 PATH 目录
-
-# 可选，强烈建议：减少模拟器的后台服务和内存占用
-brew install mobai-app/tap/simslim
+scripts/install.sh                         # 安装到 /usr/local/bin
+BIN_DIR=~/.local/bin scripts/install.sh    # 或任意 PATH 目录
 ```
+
+脚本会构建 sim-helper，并用 Homebrew 安装 [SimSlim](https://github.com/mobai-app/simslim)。`sim acquire` 依赖 SimSlim，它会关掉模拟器用不到的后台服务，降低内存占用。
 
 `xcode-select` 指向 CommandLineTools 时，会自动使用 `/Applications` 里版本最新的 Xcode，也可以用 `DEVELOPER_DIR` 指定。
 
@@ -53,6 +52,7 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 | `SIMH_WORKSPACE_BUSY` | 1 | 这个 worktree 正在构建，稍后再 `release` |
 | `SIMH_BUILD_FAILED` | xcodebuild 的退出码 | 普通构建失败，完整日志在 `remedy` 给出的路径 |
 | `SIMH_BOOT_STUCK` | 1 | 模拟器显示已启动，但无法启动进程，先检查内存压力 |
+| `SIMH_SIMSLIM_MISSING` | 1 | 运行 `scripts/install.sh`，或加 `--no-slim` 使用完整的模拟器 |
 | `SIMH_DELETE_FAILED` | 1 | 记录已保留，运行 `prune` 重试 |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | 指定的版本或型号不可用，从 `available` 字段里选一个，或运行 `sim targets` |
 
@@ -66,7 +66,7 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 - 同一个 worktree 下次还用同一台。
 - `release` 后模拟器被停放，供其他 worktree 复用，最多留 3 台（`SIM_HELPER_MAX_PARKED`），超出时删最旧的。
 - `sim acquire` 会实际启动一个进程来验证模拟器可用，卡住时重启一次。
-- 装了 SimSlim 时，`sim acquire` 自动 slim。SimSlim 失败只警告，不影响使用。
+- `sim acquire` 会用 SimSlim 精简模拟器；没装 SimSlim 时直接报错，不会创建任何东西。`--no-slim` 可以跳过。SimSlim 执行失败（比如运行时太旧）只警告，不影响使用。
 
 **编译缓存**
 

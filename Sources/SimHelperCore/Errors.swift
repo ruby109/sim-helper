@@ -11,6 +11,7 @@ public struct HelperError: Error, Equatable {
         case simctlFailed = "SIMH_SIMCTL_FAILED"
         case bootStuck = "SIMH_BOOT_STUCK"
         case slimFailed = "SIMH_SLIM_FAILED"
+        case simslimMissing = "SIMH_SIMSLIM_MISSING"
         case workspaceBusy = "SIMH_WORKSPACE_BUSY"
         case unknownWorkspace = "SIMH_UNKNOWN_WORKSPACE"
         case cacheBusy = "SIMH_COMPILATION_CACHE_BUSY"

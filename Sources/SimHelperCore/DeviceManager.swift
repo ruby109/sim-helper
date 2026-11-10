@@ -68,6 +68,12 @@ public struct DeviceManager {
     /// Returns this workspace's simulator: the one it already has, else a parked
     /// match, else a new one.
     public func acquire(_ workspace: Workspace, _ options: AcquireOptions = AcquireOptions()) throws -> OwnedDevice {
+        // Checked before allocating: a stock simulator uses several times the memory,
+        // which quietly limits how many agents fit on one Mac.
+        if options.boot, options.slim, !runner.run("which", ["simslim"]).ok {
+            throw HelperError(.simslimMissing, "SimSlim is not installed.",
+                              remedy: "Run scripts/install.sh or `brew install mobai-app/tap/simslim`, or pass --no-slim to use a stock simulator.")
+        }
         try workspace.record(in: paths)
         var device = try withRegistry { registry in
             try allocate(workspace, options, &registry)
@@ -136,10 +142,9 @@ public struct DeviceManager {
         throw HelperError(.bootStuck, "Simulator \(udid) reports booted but cannot launch a process.", remedy: "Check host memory pressure, then retry. Deleting it with `xcrun simctl delete \(udid)` makes the next acquire create a new one.")
     }
 
-    /// Returns whether the simulator was slimmed. SimSlim is an optimization, so its
-    /// absence or failure leaves a working, if heavier, simulator.
+    /// Returns whether the simulator was slimmed. A SimSlim failure, such as on a
+    /// runtime older than iOS 18, leaves a working, if heavier, simulator.
     private func slim(_ device: OwnedDevice, except: String?) throws -> Bool {
-        guard runner.run("which", ["simslim"]).ok else { return false }
         var args = ["on", device.udid]
         if let except { args += ["--except", except] }
         let result = runner.run("simslim", args, timeout: bootTimeout)

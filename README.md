@@ -8,15 +8,14 @@ The design borrows from [Stim](https://github.com/appandflow/stim) (MIT), which 
 
 ## Install
 
-Requires Xcode 26 or later. Swift compilation caching needs Xcode 27 (Swift 6.4).
+Requires Xcode 26 or later and [Homebrew](https://brew.sh). Swift compilation caching needs Xcode 27 (Swift 6.4).
 
 ```sh
-swift build -c release
-cp .build/release/sim-helper /usr/local/bin/   # or any directory on your PATH
-
-# Optional, strongly recommended: fewer background services and less memory per simulator
-brew install mobai-app/tap/simslim
+scripts/install.sh                         # installs to /usr/local/bin
+BIN_DIR=~/.local/bin scripts/install.sh    # or any directory on your PATH
 ```
+
+The script builds sim-helper and installs [SimSlim](https://github.com/mobai-app/simslim) with Homebrew. `sim acquire` requires SimSlim, which turns off background services the simulator does not need and cuts its memory use.
 
 When `xcode-select` points at the Command Line Tools, sim-helper uses the newest Xcode in `/Applications`. Set `DEVELOPER_DIR` to choose one yourself.
 
@@ -53,6 +52,7 @@ Failures return stable error codes. With `--json`, the output is `{ok, code, mes
 | `SIMH_WORKSPACE_BUSY` | 1 | This worktree is building. Run `release` later |
 | `SIMH_BUILD_FAILED` | xcodebuild's exit code | An ordinary build failure. The full log is at the path in `remedy` |
 | `SIMH_BOOT_STUCK` | 1 | The simulator reports booted but cannot launch a process. Check memory pressure first |
+| `SIMH_SIMSLIM_MISSING` | 1 | Run `scripts/install.sh`, or pass `--no-slim` to use a stock simulator |
 | `SIMH_DELETE_FAILED` | 1 | The record was kept. Run `prune` to retry |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | The requested version or model is unavailable. Pick one from `available`, or run `sim targets` |
 
@@ -66,7 +66,7 @@ See `Sources/SimHelperCore/Errors.swift` for the other codes.
 - A worktree gets the same simulator back next time.
 - `release` parks the simulator so another worktree can reuse it. Up to 3 are kept (`SIM_HELPER_MAX_PARKED`); beyond that, the oldest is deleted.
 - `sim acquire` launches a real process to confirm the simulator works, and restarts it once if it is stuck.
-- If SimSlim is installed, `sim acquire` slims the simulator. A SimSlim failure is only a warning.
+- `sim acquire` slims the simulator with SimSlim, and fails before creating anything if SimSlim is missing. `--no-slim` skips it. A SimSlim failure, such as on an older runtime, is only a warning.
 
 **Compilation cache**
 

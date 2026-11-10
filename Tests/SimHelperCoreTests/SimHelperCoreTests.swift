@@ -8,7 +8,7 @@ final class FakeRunner: CommandRunner {
     var calls: [[String]] = []
     var failing: Set<String> = []
     var launchFailures = 0
-    var simslimInstalled = false
+    var simslimInstalled = true
     var buildLines: [String] = []
     var buildStatus: Int32 = 0
     var onBuild: (() -> Void)?
@@ -242,7 +242,8 @@ final class Sandbox {
         let box = Sandbox()
         let a = try box.existingWorkspace("a")
         box.runner.launchFailures = 1
-        _ = try box.manager().acquire(a)
+        // Without slimming, whose reboot would add a boot of its own.
+        _ = try box.manager().acquire(a, AcquireOptions(slim: false))
         #expect(box.runner.simctlCalls("shutdown").count == 1)
         #expect(box.runner.simctlCalls("boot").count == 2)
 
@@ -251,13 +252,23 @@ final class Sandbox {
         #expect(throws: HelperError.self) { try box.manager().acquire(b) }
     }
 
-    @Test func slimsOnlyOnceAndOnlyWhenInstalled() throws {
+    @Test func missingSimslimFailsBeforeCreatingAnything() throws {
+        let box = Sandbox()
+        box.runner.simslimInstalled = false
+        let a = try box.existingWorkspace("a")
+        #expect(throws: HelperError.self) { try box.manager().acquire(a) }
+        #expect(box.runner.simctlCalls("create").isEmpty)
+
+        // Opting out, or not booting, does not need SimSlim.
+        _ = try box.manager().acquire(a, AcquireOptions(boot: false))
+        let device = try box.manager().acquire(a, AcquireOptions(slim: false))
+        #expect(!device.slimmed)
+        #expect(!box.runner.calls.contains { $0[0] == "simslim" })
+    }
+
+    @Test func slimsOnlyOnce() throws {
         let box = Sandbox()
         let a = try box.existingWorkspace("a")
-        _ = try box.manager().acquire(a, AcquireOptions(slim: true))
-        #expect(!box.runner.calls.contains { $0[0] == "simslim" })
-
-        box.runner.simslimInstalled = true
         let device = try box.manager().acquire(a, AcquireOptions(slim: true, slimExcept: "push"))
         #expect(device.slimmed)
         #expect(box.runner.calls.filter { $0[0] == "simslim" } == [["simslim", "on", device.udid, "--except", "push"]])
