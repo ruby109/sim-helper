@@ -3,7 +3,7 @@ import Foundation
 /// The help text, kept as data so `--json` can return it and tests can check it
 /// against the error codes and flags the CLI actually has.
 public enum Help {
-    public static let version = "0.1.3"
+    public static let version = "0.1.4"
 
     public struct Option: Encodable, Equatable {
         public var flag: String
@@ -131,6 +131,35 @@ public enum Help {
             output: "What was released, deleted, skipped because a build was running, or failed. Exits 1 if anything failed.",
             errors: ["SIMH_STATE_CORRUPT"],
             examples: ["sim-helper prune --json"]),
+        Command(
+            command: "skill install",
+            summary: "Teach Claude Code and Codex to use sim-helper by linking its skill",
+            usage: "sim-helper skill install [--claude] [--codex] [--from <dir>] [--json]",
+            options: [
+                Option(flag: "--claude", summary: "Link into ~/.claude/skills"),
+                Option(flag: "--codex", summary: "Link into ~/.agents/skills"),
+                Option(flag: "--from", value: "<dir>", summary: "The skills/sim-helper folder to link (default: the one installed with this binary)"),
+            ],
+            output: "One line per agent: installed, alreadyInstalled, or replaced. With --json: {source, results: [{agent, path, status}]}.",
+            errors: ["SIMH_SKILL_NOT_FOUND", "SIMH_SKILL_CONFLICT", "SIMH_STATE_CORRUPT"],
+            notes: [
+                "Without --claude or --codex, installs for each agent found here (its config directory or command exists).",
+                "Creates a symlink, so `brew upgrade` updates the skill. A stale link from an older sim-helper is replaced; anything else at the path is left alone.",
+                "Claude Code picks it up in a new session or with /skills; Codex may need a restart.",
+            ],
+            examples: ["sim-helper skill install", "sim-helper skill install --codex --json"]),
+        Command(
+            command: "skill uninstall",
+            summary: "Remove the links `skill install` made",
+            usage: "sim-helper skill uninstall [--claude] [--codex] [--json]",
+            options: [
+                Option(flag: "--claude", summary: "Only ~/.claude/skills"),
+                Option(flag: "--codex", summary: "Only ~/.agents/skills"),
+            ],
+            output: "One line per agent: uninstalled or notInstalled. With --json: {results: [{agent, path, status}]}.",
+            errors: ["SIMH_SKILL_CONFLICT", "SIMH_STATE_CORRUPT"],
+            notes: ["Only removes a symlink to a sim-helper skill folder; a real directory is left alone."],
+            examples: ["sim-helper skill uninstall"]),
     ]
 
     public static let errors: [ErrorEntry] = [
@@ -150,6 +179,8 @@ public enum Help {
         ErrorEntry(code: "SIMH_UNKNOWN_WORKSPACE", exitCode: 1, meaning: "No state is recorded for that removed worktree", action: "Nothing to release; `prune` cleans up anything left"),
         ErrorEntry(code: "SIMH_DELETE_FAILED", exitCode: 1, meaning: "A simulator or the worktree's state directory could not be deleted; simulator records are kept", action: "Run `sim-helper prune` to retry"),
         ErrorEntry(code: "SIMH_STATE_CORRUPT", exitCode: 1, meaning: "State under SIM_HELPER_HOME could not be read, written, or locked", action: "Read the message; check that SIM_HELPER_HOME exists and is writable"),
+        ErrorEntry(code: "SIMH_SKILL_NOT_FOUND", exitCode: 1, meaning: "The skill folder that ships with sim-helper could not be found", action: "Pass --from with the skills/sim-helper folder of a sim-helper checkout"),
+        ErrorEntry(code: "SIMH_SKILL_CONFLICT", exitCode: 1, meaning: "Something other than the sim-helper skill is already at the skill path, so it was left alone", action: "Move it aside and rerun, or choose one agent with --claude or --codex"),
         ErrorEntry(code: "SIMH_UNEXPECTED", exitCode: 1, meaning: "An error sim-helper does not classify, likely a bug", action: "Report it with the message; retrying rarely helps"),
     ]
 

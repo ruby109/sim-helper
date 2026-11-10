@@ -303,6 +303,35 @@ struct HelpOverview: Encodable {
     var errors = Help.errors
 }
 
+/// `skill install|uninstall`. Needs no Xcode, so it runs before one is looked up.
+func runSkill(_ rawArguments: [String], json: Bool) throws {
+    var args = Arguments(values: rawArguments)
+    guard !args.values.isEmpty else { throw missingCommand("skill") }
+    let sub = args.values.removeFirst()
+    var requested: [SkillInstaller.Agent] = []
+    if args.flag("--claude") { requested.append(.claude) }
+    if args.flag("--codex") { requested.append(.codex) }
+    // $HOME first, like the shells that print these paths.
+    let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
+    let installer = SkillInstaller(home: home, executablePath: Bundle.main.executablePath ?? CommandLine.arguments[0], runner: ProcessRunner())
+    let report: SkillInstaller.Report
+    switch sub {
+    case "install":
+        let from = try args.option("--from")
+        try args.expectEmpty("skill install")
+        let agents = try installer.agents(requested: requested)
+        report = try installer.install(from: try from.map(resolvedPath) ?? installer.source(), for: agents)
+    case "uninstall":
+        try args.expectEmpty("skill uninstall")
+        report = try installer.uninstall(for: requested.isEmpty ? SkillInstaller.Agent.allCases : requested)
+    default:
+        throw unknownCommand(sub, in: "skill")
+    }
+    try emit(report, json: json) { r in
+        r.results.map { "\($0.agent.rawValue): \($0.status.rawValue)  \($0.path)" }.joined(separator: "\n")
+    }
+}
+
 /// `help [words]` and `<words> --help`. Handled before Xcode is looked up, so it
 /// works on a machine without one.
 func printHelp(_ words: [String], json: Bool) throws {
@@ -340,6 +369,8 @@ do {
         try printHelp(own.dropFirst().filter { !$0.hasPrefix("-") }, json: json)
     } else if own.contains("--help") || own.contains("-h") {
         try printHelp(Array(own.prefix { !$0.hasPrefix("-") }), json: json)
+    } else if own.first == "skill" {
+        try runSkill(Array(arguments.values.dropFirst()), json: json)
     } else if own.isEmpty, !json {
         status(Help.overview)
         exit(64)

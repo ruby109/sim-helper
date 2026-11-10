@@ -41,6 +41,7 @@ sim-helper prune                           # 清理 worktree 已不存在的状�
 sim-helper cache status
 sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在用时会拒绝
 
+sim-helper skill install                   # 让 Claude Code 和 Codex 学会使用 sim-helper
 sim-helper help [<command>]                # 或 `<command> --help`：选项、输出、错误码和示例
 sim-helper help errors                     # 所有错误码及处理方式
 sim-helper --version
@@ -54,22 +55,22 @@ sim-helper --version
 
 **给 Claude Code 和 Codex 的 skill。** `skills/sim-helper` 告诉 agent 典型流程和错误处理方式。它是标准的 `SKILL.md`，两者都能用。
 
-Claude Code 可以作为插件安装，之后通过 `/plugin` 更新：
+```sh
+sim-helper skill install            # 检测到哪个 agent 就装到哪个：Claude Code、Codex 或两者
+sim-helper skill install --codex    # 也可以只装一个
+sim-helper skill uninstall
+```
+
+它会把 skill 链接到 `~/.claude/skills` 和 `~/.agents/skills`，`brew upgrade` 时会一起更新。在两者中都可以用 `/skills` 检查是否加载，Codex 可能需要重启一次。
+
+Claude Code 也可以作为插件安装，之后通过 `/plugin` 更新：
 
 ```
 /plugin marketplace add ruby109/sim-helper
 /plugin install sim-helper@sim-helper
 ```
 
-也可以链接 Homebrew 安装的那份，`brew upgrade` 时会一起更新：
-
-```sh
-SKILL="$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper"
-mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/sim-helper   # Claude Code
-mkdir -p ~/.agents/skills && ln -s "$SKILL" ~/.agents/skills/sim-helper   # Codex
-```
-
-只想对某个仓库启用的话，改链接到该仓库的 `.claude/skills/`（Claude Code）或 `.agents/skills/`（Codex）。在两者中都可以用 `/skills` 检查是否加载。从源码安装时，用同样的方式链接 `skills/sim-helper`。
+只想对某个仓库启用的话，把 `skills/sim-helper` 链接到该仓库的 `.claude/skills/`（Claude Code）或 `.agents/skills/`（Codex）。
 
 **其他 agent。** 把下面这段粘贴到项目的 `AGENTS.md`：
 

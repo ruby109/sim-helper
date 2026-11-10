@@ -18,6 +18,8 @@ public struct HelperError: Error, Equatable {
         case buildFailed = "SIMH_BUILD_FAILED"
         case deleteFailed = "SIMH_DELETE_FAILED"
         case stateCorrupt = "SIMH_STATE_CORRUPT"
+        case skillNotFound = "SIMH_SKILL_NOT_FOUND"
+        case skillConflict = "SIMH_SKILL_CONFLICT"
         case unexpected = "SIMH_UNEXPECTED"
     }
 

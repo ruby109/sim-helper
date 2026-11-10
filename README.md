@@ -41,6 +41,7 @@ sim-helper prune                           # clean up state for worktrees that n
 sim-helper cache status
 sim-helper cache clear --if-over-gb 20     # clears the whole cache; refused while a build is using it
 
+sim-helper skill install                   # teach Claude Code and Codex to use sim-helper
 sim-helper help [<command>]                # or `<command> --help`: options, output, errors, examples
 sim-helper help errors                     # every error code and what to do
 sim-helper --version
@@ -54,22 +55,22 @@ Every command accepts `--json`. Results go to stdout; status and build output go
 
 **Skill for Claude Code and Codex.** `skills/sim-helper` teaches an agent the workflow and how to handle errors. It is a standard `SKILL.md`, so both agents can use it.
 
-Claude Code, as a plugin (updates through `/plugin`):
+```sh
+sim-helper skill install            # for every agent found: Claude Code, Codex, or both
+sim-helper skill install --codex    # or just one
+sim-helper skill uninstall
+```
+
+It links the skill into `~/.claude/skills` and `~/.agents/skills`, so `brew upgrade` keeps it current. Check with `/skills` in either agent; Codex may need a restart.
+
+Claude Code can also install it as a plugin, updated through `/plugin`:
 
 ```
 /plugin marketplace add ruby109/sim-helper
 /plugin install sim-helper@sim-helper
 ```
 
-Or link the copy Homebrew installed, which `brew upgrade` keeps current:
-
-```sh
-SKILL="$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper"
-mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/sim-helper   # Claude Code
-mkdir -p ~/.agents/skills && ln -s "$SKILL" ~/.agents/skills/sim-helper   # Codex
-```
-
-For a single repo, link it into that repo's `.claude/skills/` (Claude Code) or `.agents/skills/` (Codex) instead. Check with `/skills` in either agent. From a checkout, link `skills/sim-helper` the same way.
+For a single repo, link `skills/sim-helper` into that repo's `.claude/skills/` (Claude Code) or `.agents/skills/` (Codex) instead.
 
 **Other agents.** Paste this into your project's `AGENTS.md`:
 

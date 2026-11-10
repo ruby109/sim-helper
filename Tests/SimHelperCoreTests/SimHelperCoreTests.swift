@@ -613,7 +613,8 @@ final class Sandbox {
     @Test func groupsAndTopLevelComeFromCommands() {
         #expect(Help.groups["sim"] == ["acquire", "targets", "list"])
         #expect(Help.groups["cache"] == ["status", "clear"])
-        #expect(Help.topLevel == ["env", "sim", "build", "cache", "release", "prune", "help"])
+        #expect(Help.topLevel == ["env", "sim", "build", "cache", "release", "prune", "skill", "help"])
+        #expect(Help.groups["skill"] == ["install", "uninstall"])
     }
 
     @Test func suggestsCloseMatchesOnly() {
@@ -629,5 +630,73 @@ final class Sandbox {
             #expect(!command.output.isEmpty && !command.examples.isEmpty, "\(command.command)")
             #expect(command.options.allSatisfy { $0.flag.hasPrefix("--") }, "\(command.command)")
         }
+    }
+}
+
+@Suite struct SkillInstall {
+    let box = Sandbox()
+    let fm = FileManager.default
+
+    func skillFolder(_ path: String) throws -> String {
+        try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+        fm.createFile(atPath: path + "/SKILL.md", contents: Data("---\nname: sim-helper\n---\n".utf8))
+        return path
+    }
+
+    func installer(executable: String = "/nowhere/sim-helper") -> SkillInstaller {
+        SkillInstaller(home: box.home + "/home", executablePath: executable, runner: box.runner)
+    }
+
+    @Test func linksForEachAgentAndIsIdempotent() throws {
+        let source = try skillFolder(box.home + "/share/skills/sim-helper")
+        let first = try installer().install(from: source, for: [.claude, .codex])
+        #expect(first.results.map(\.status) == [.installed, .installed])
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.home + "/home/.claude/skills/sim-helper") == source)
+        #expect(try fm.destinationOfSymbolicLink(atPath: box.home + "/home/.agents/skills/sim-helper") == source)
+        let again = try installer().install(from: source, for: [.claude, .codex])
+        #expect(again.results.map(\.status) == [.alreadyInstalled, .alreadyInstalled])
+    }
+
+    @Test func replacesStaleLinkButNotSomeoneElsesSkill() throws {
+        let source = try skillFolder(box.home + "/new/skills/sim-helper")
+        let claudeDir = box.home + "/home/.claude/skills", codexDir = box.home + "/home/.agents/skills"
+        try fm.createDirectory(atPath: claudeDir, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: codexDir + "/sim-helper", withIntermediateDirectories: true)
+        // A link into a removed Homebrew version.
+        try fm.createSymbolicLink(atPath: claudeDir + "/sim-helper", withDestinationPath: "/opt/homebrew/Cellar/sim-helper/0.0.1/share/sim-helper/skills/sim-helper")
+        #expect(throws: HelperError.self) { try installer().install(from: source, for: [.claude, .codex]) }
+        #expect(try fm.destinationOfSymbolicLink(atPath: claudeDir + "/sim-helper") == source)
+        #expect((try? fm.destinationOfSymbolicLink(atPath: codexDir + "/sim-helper")) == nil)
+        #expect(throws: HelperError.self) { try installer().uninstall(for: [.codex]) }
+        #expect(fm.fileExists(atPath: codexDir + "/sim-helper"))
+    }
+
+    @Test func uninstallRemovesOnlyItsLinks() throws {
+        let source = try skillFolder(box.home + "/share/skills/sim-helper")
+        _ = try installer().install(from: source, for: [.claude])
+        let report = try installer().uninstall(for: [.claude, .codex])
+        #expect(report.results.map(\.status) == [.uninstalled, .notInstalled])
+        #expect(fm.fileExists(atPath: source + "/SKILL.md"))
+    }
+
+    @Test func findsTheSkillShippedWithTheBinary() throws {
+        // Homebrew: prefer the opt path, which survives upgrades.
+        let prefix = box.home + "/brew"
+        _ = try skillFolder(prefix + "/Cellar/sim-helper/0.1.4/share/sim-helper/skills/sim-helper")
+        let opt = try skillFolder(prefix + "/opt/sim-helper/share/sim-helper/skills/sim-helper")
+        #expect(try installer(executable: prefix + "/Cellar/sim-helper/0.1.4/bin/sim-helper").source() == opt)
+        // A SwiftPM build inside a checkout.
+        let checkout = box.home + "/checkout"
+        let skill = try skillFolder(checkout + "/skills/sim-helper")
+        #expect(try installer(executable: checkout + "/.build/arm64-apple-macosx/release/sim-helper").source() == skill)
+        #expect(throws: HelperError.self) { try installer().source() }
+    }
+
+    @Test func detectsInstalledAgents() throws {
+        box.runner.simslimInstalled = false  // makes `which` fail for everything
+        #expect(throws: HelperError.self) { try installer().agents(requested: []) }
+        try fm.createDirectory(atPath: box.home + "/home/.codex", withIntermediateDirectories: true)
+        #expect(try installer().agents(requested: []) == [.codex])
+        #expect(try installer().agents(requested: [.claude]) == [.claude])
     }
 }

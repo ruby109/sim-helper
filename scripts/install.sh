@@ -32,6 +32,4 @@ case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
     *) echo "note: $BIN_DIR is not on your PATH." ;;
 esac
-echo "To give agents the sim-helper skill:"
-echo "  Claude Code: mkdir -p ~/.claude/skills && ln -s \"$PWD/skills/sim-helper\" ~/.claude/skills/sim-helper"
-echo "  Codex:       mkdir -p ~/.agents/skills && ln -s \"$PWD/skills/sim-helper\" ~/.agents/skills/sim-helper"
+echo "To teach Claude Code and Codex to use it: sim-helper skill install --from \"$PWD/skills/sim-helper\""
