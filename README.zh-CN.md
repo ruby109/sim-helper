@@ -106,3 +106,7 @@ swift test   # xcode-select 指向 CommandLineTools 时，需设置 DEVELOPER_DI
 ```
 
 没有做的部分：产物缓存和单飞构建、已合并 worktree 的自动判断、磁盘压力分级清理、worktree 预热。
+
+## 许可证
+
+[MIT](LICENSE)

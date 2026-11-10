@@ -106,3 +106,7 @@ swift test   # set DEVELOPER_DIR when xcode-select points at the Command Line To
 ```
 
 Not implemented: artifact caching and single-flight builds, detecting merged worktrees automatically, tiered cleanup under disk pressure, and worktree prewarming.
+
+## License
+
+[MIT](LICENSE)
