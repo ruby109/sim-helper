@@ -11,11 +11,17 @@
 需要 Xcode 26 或更新版本，以及 [Homebrew](https://brew.sh)（Swift 编译缓存需要 Xcode 27 / Swift 6.4）。
 
 ```sh
+brew install ruby109/tap/sim-helper
+```
+
+也可以从源码目录安装：
+
+```sh
 scripts/install.sh                         # 安装到 /usr/local/bin
 BIN_DIR=~/.local/bin scripts/install.sh    # 或任意 PATH 目录
 ```
 
-脚本会构建 sim-helper，并用 Homebrew 安装 [SimSlim](https://github.com/mobai-app/simslim)。`sim acquire` 依赖 SimSlim，它会关掉模拟器用不到的后台服务，降低内存占用。
+两种方式都会用 Homebrew 安装 [SimSlim](https://github.com/mobai-app/simslim)。`sim acquire` 依赖 SimSlim，它会关掉模拟器用不到的后台服务，降低内存占用。
 
 `xcode-select` 指向 CommandLineTools 时，会自动使用 `/Applications` 里版本最新的 Xcode，也可以用 `DEVELOPER_DIR` 指定。
 

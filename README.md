@@ -11,11 +11,17 @@ The design borrows from [Stim](https://github.com/appandflow/stim) (MIT), which 
 Requires Xcode 26 or later and [Homebrew](https://brew.sh). Swift compilation caching needs Xcode 27 (Swift 6.4).
 
 ```sh
+brew install ruby109/tap/sim-helper
+```
+
+To build from a checkout instead:
+
+```sh
 scripts/install.sh                         # installs to /usr/local/bin
 BIN_DIR=~/.local/bin scripts/install.sh    # or any directory on your PATH
 ```
 
-The script builds sim-helper and installs [SimSlim](https://github.com/mobai-app/simslim) with Homebrew. `sim acquire` requires SimSlim, which turns off background services the simulator does not need and cuts its memory use.
+Both install [SimSlim](https://github.com/mobai-app/simslim) with Homebrew. `sim acquire` requires SimSlim, which turns off background services the simulator does not need and cuts its memory use.
 
 When `xcode-select` points at the Command Line Tools, sim-helper uses the newest Xcode in `/Applications`. Set `DEVELOPER_DIR` to choose one yourself.
 
