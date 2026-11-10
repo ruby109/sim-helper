@@ -82,7 +82,11 @@ See `Sources/SimHelperCore/Errors.swift` for the other codes.
 
 State lives in `~/.sim-helper` by default (override with `SIM_HELPER_HOME`). Nothing is written into the worktree.
 
-## Measurements (Xcode 27.2, Apple Silicon, small SwiftUI app)
+## Measurements
+
+All on one Apple Silicon Mac with 16 GB of memory and Xcode 27.2, using small test apps. Each figure comes from a single run.
+
+**Compilation cache** (small SwiftUI app)
 
 | Scenario | Cache hits | Time |
 | --- | --- | --- |
@@ -90,11 +94,33 @@ State lives in `~/.sim-helper` by default (override with `SIM_HELPER_HOME`). Not
 | Second worktree, same code | 70 / 70 | 4.5s |
 | Second worktree, one file changed | 63 / 70 | not recorded |
 
+**SimSlim** (one idle iPhone 18 Pro simulator, iOS 27.2, SimSlim 0.14.0)
+
+| | Stock | Slimmed |
+| --- | --- | --- |
+| Processes | 220–235 | 74–78 |
+| Memory footprint | 9.18–10.00 GB | 2.43–2.50 GB |
+| Reboot | 8s | 3s |
+
+Slimming takes about 12s once, including a reboot. Footprint is `phys_footprint` from `simslim measure`, summed per process, so it overstates physical memory and does not add up across simulators: two stock simulators reported 21 GB on this 16 GB Mac.
+
+**Concurrency** (agents acquiring simulators at the same time, then running 3 unit tests and 1 UI test twice)
+
+| Simulators | `sim acquire` | First test run | Second test run | Peak swap |
+| --- | --- | --- | --- | --- |
+| 2 slimmed | 147s | 50s | 16s | 4.6 GB |
+| 3 slimmed | 216–218s | 58–59s | 19–20s | 7.3 GB |
+| 4 slimmed | 337–394s, 2 of 4 failed | 124–233s | 50–171s | 9.6 GB |
+| 2 stock | 84–87s | 136–204s | 34s | 9.0 GB |
+
+All tests passed, including the UI test on slimmed simulators. With 4, two acquires failed with `SIMH_BOOT_STUCK`; their builds booted the simulators later, without slimming. The stock run went last, when swap was already about 4.5 GB, so it is somewhat disadvantaged. On this Mac, 2–3 simulators at once is comfortable.
+
 ## Known limitations
 
 - **SPM package targets barely hit the cache across worktrees.** A project whose root is a `Package.swift` measured 2 / 8, cause unknown. `.xcodeproj` projects that depend on local packages may be affected too; not tested.
 - **Do not put `SIM_HELPER_HOME` under `/tmp` or `/private/tmp`.** Xcode normalizes the path to `/tmp`, which breaks prefix mapping. Hit rates were unstable (9 / 70 to 63 / 70 for the same app) and reached 70 / 70 after moving to a normal path. Worktrees in those directories probably have the same problem; not tested separately.
-- **`--no-boot` and `build` do not run SimSlim.** Run `sim acquire` once to slim the simulator.
+- **First boots are not throttled.** Acquiring 4 simulators at once on a 16 GB Mac made 2 of them fail with `SIMH_BOOT_STUCK`. Stagger acquires, or retry.
+- **`--no-boot` and `build` do not run SimSlim.** Run `sim acquire` once to slim the simulator. A simulator that `build` boots after a failed acquire stays stock.
 - **Parked simulators keep their app data.** A worktree may inherit apps installed by the previous one; uninstall them if you need a clean state. They are not erased automatically because erasing undoes SimSlim's settings.
 - **If sim-helper is killed with `kill -9`, xcodebuild may keep running after its cache lock is released.** SIGINT, SIGTERM, and SIGHUP are forwarded to xcodebuild.
 - **SimSlim needs an iOS 18 or later runtime.** Older runtimes lose the settings on reboot.

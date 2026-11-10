@@ -82,7 +82,11 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 
 状态默认在 `~/.sim-helper`（`SIM_HELPER_HOME` 可改），不会往 worktree 里写文件。
 
-## 实测（Xcode 27.2，Apple Silicon，小型 SwiftUI app）
+## 实测
+
+都在同一台 16GB 内存的 Apple Silicon Mac 上测得，使用 Xcode 27.2 和小型测试 app，每个数字只跑了一次。
+
+**编译缓存**（小型 SwiftUI app）
 
 | 场景 | 命中 | 耗时 |
 | --- | --- | --- |
@@ -90,11 +94,33 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 | 第二个 worktree，相同代码 | 70 / 70 | 4.5s |
 | 第二个 worktree，改一个文件 | 63 / 70 | 未记录 |
 
+**SimSlim**（一台空闲的 iPhone 18 Pro 模拟器，iOS 27.2，SimSlim 0.14.0）
+
+| | 未 slim | slim 后 |
+| --- | --- | --- |
+| 进程数 | 220–235 | 74–78 |
+| 内存占用 | 9.18–10.00GB | 2.43–2.50GB |
+| 重启 | 8s | 3s |
+
+slim 只需做一次，含重启约 12s。内存占用是 `simslim measure` 给出的 `phys_footprint`，按进程累加，会高估实际物理内存，多台之间也不能直接相加：两台未 slim 的模拟器合计 21GB，而这台 Mac 只有 16GB。
+
+**并发**（多个 agent 同时申请模拟器，再各跑两轮 3 个单元测试和 1 个 UI 测试）
+
+| 模拟器 | `sim acquire` | 第一轮测试 | 第二轮测试 | 最高 swap |
+| --- | --- | --- | --- | --- |
+| 2 台 slim | 147s | 50s | 16s | 4.6GB |
+| 3 台 slim | 216–218s | 58–59s | 19–20s | 7.3GB |
+| 4 台 slim | 337–394s，4 台中 2 台失败 | 124–233s | 50–171s | 9.6GB |
+| 2 台未 slim | 84–87s | 136–204s | 34s | 9.0GB |
+
+所有测试都通过了，包括 slim 后的 UI 测试。4 台时有 2 台 `sim acquire` 报 `SIMH_BOOT_STUCK`，之后由 `build` 启动，但没有 slim。未 slim 组最后跑，当时 swap 已有约 4.5GB，结果对它略不利。在这台 Mac 上，同时 2 到 3 台比较稳妥。
+
 ## 已知限制
 
 - **SPM 包的目标几乎不跨 worktree 命中。** 根目录就是 `Package.swift` 的项目实测 2 / 8，原因未查明。依赖本地包的 `.xcodeproj` 项目也可能受影响，没有测过。
 - **`SIM_HELPER_HOME` 不要放在 `/tmp` 或 `/private/tmp` 下。** Xcode 会把路径规范化成 `/tmp`，和前缀映射对不上。实测命中率不稳定（同一个 app 9 / 70 到 63 / 70），移到普通路径后是 70 / 70。worktree 放在这些目录下很可能有同样的问题，没有单独测过。
-- **`--no-boot` 和 `build` 不会触发 SimSlim。** 要 slim 需先运行一次 `sim acquire`。
+- **没有限制同时首次启动的数量。** 在 16GB 的 Mac 上同时申请 4 台，有 2 台报 `SIMH_BOOT_STUCK`。请错开申请，或者重试。
+- **`--no-boot` 和 `build` 不会触发 SimSlim。** 要 slim 需先运行一次 `sim acquire`。`sim acquire` 失败后由 `build` 启动的模拟器不会被 slim。
 - **停放的模拟器不清理 app 数据。** 换 worktree 后可能残留上一个 worktree 安装的 app，需要干净环境时请自己卸载。没有自动抹掉，是因为 erase 会让 SimSlim 的设置失效。
 - **`kill -9` 杀掉 sim-helper 时，xcodebuild 可能继续运行，而它的缓存锁已释放。** SIGINT、SIGTERM、SIGHUP 会转发给 xcodebuild。
 - **SimSlim 需要 iOS 18 或更新的运行时**，更旧的运行时重启后设置不保留。
