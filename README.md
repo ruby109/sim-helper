@@ -52,14 +52,24 @@ Every command accepts `--json`. Results go to stdout; status and build output go
 
 ## For agents
 
-**Claude Code skill.** `skills/sim-helper` teaches Claude the workflow and how to handle errors. Homebrew installs it; link it into your skills directory:
+**Skill for Claude Code and Codex.** `skills/sim-helper` teaches an agent the workflow and how to handle errors. It is a standard `SKILL.md`, so both agents can use it.
 
-```sh
-mkdir -p ~/.claude/skills
-ln -s "$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper" ~/.claude/skills/sim-helper
+Claude Code, as a plugin (updates through `/plugin`):
+
+```
+/plugin marketplace add ruby109/sim-helper
+/plugin install sim-helper@sim-helper
 ```
 
-Use a project's `.claude/skills` instead to enable it for one repo. From a checkout, link `skills/sim-helper` the same way.
+Or link the copy Homebrew installed, which `brew upgrade` keeps current:
+
+```sh
+SKILL="$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper"
+mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/sim-helper   # Claude Code
+mkdir -p ~/.agents/skills && ln -s "$SKILL" ~/.agents/skills/sim-helper   # Codex
+```
+
+For a single repo, link it into that repo's `.claude/skills/` (Claude Code) or `.agents/skills/` (Codex) instead. Check with `/skills` in either agent. From a checkout, link `skills/sim-helper` the same way.
 
 **Other agents.** Paste this into your project's `AGENTS.md`:
 

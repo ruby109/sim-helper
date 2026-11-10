@@ -52,14 +52,24 @@ sim-helper --version
 
 ## 给 agent 的约定
 
-**Claude Code skill。** `skills/sim-helper` 告诉 Claude 典型流程和错误处理方式。Homebrew 会一起安装它，链接到你的 skills 目录即可：
+**给 Claude Code 和 Codex 的 skill。** `skills/sim-helper` 告诉 agent 典型流程和错误处理方式。它是标准的 `SKILL.md`，两者都能用。
 
-```sh
-mkdir -p ~/.claude/skills
-ln -s "$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper" ~/.claude/skills/sim-helper
+Claude Code 可以作为插件安装，之后通过 `/plugin` 更新：
+
+```
+/plugin marketplace add ruby109/sim-helper
+/plugin install sim-helper@sim-helper
 ```
 
-只想对某个仓库启用的话，改链接到该项目的 `.claude/skills`。从源码安装时，用同样的方式链接 `skills/sim-helper`。
+也可以链接 Homebrew 安装的那份，`brew upgrade` 时会一起更新：
+
+```sh
+SKILL="$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper"
+mkdir -p ~/.claude/skills && ln -s "$SKILL" ~/.claude/skills/sim-helper   # Claude Code
+mkdir -p ~/.agents/skills && ln -s "$SKILL" ~/.agents/skills/sim-helper   # Codex
+```
+
+只想对某个仓库启用的话，改链接到该仓库的 `.claude/skills/`（Claude Code）或 `.agents/skills/`（Codex）。在两者中都可以用 `/skills` 检查是否加载。从源码安装时，用同样的方式链接 `skills/sim-helper`。
 
 **其他 agent。** 把下面这段粘贴到项目的 `AGENTS.md`：
 

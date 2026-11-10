@@ -1,0 +1,14 @@
+{
+  "name": "sim-helper",
+  "description": "The sim-helper skill: per-worktree iOS simulators and a shared Xcode compilation cache for parallel agents.",
+  "owner": {
+    "name": "ruby109"
+  },
+  "plugins": [
+    {
+      "name": "sim-helper",
+      "source": "./",
+      "description": "Skill for the sim-helper CLI. Install the CLI itself with `brew install ruby109/tap/sim-helper`."
+    }
+  ]
+}
