@@ -2,7 +2,7 @@ import Foundation
 
 /// Failure with a stable code that callers (usually agents) can branch on.
 public struct HelperError: Error, Equatable {
-    public enum Code: String {
+    public enum Code: String, CaseIterable {
         case usage = "SIMH_USAGE"
         case noXcode = "SIMH_NO_XCODE"
         case notInGitRepo = "SIMH_NOT_IN_GIT_REPO"
@@ -10,7 +10,6 @@ public struct HelperError: Error, Equatable {
         case noDeviceType = "SIMH_NO_DEVICE_TYPE"
         case simctlFailed = "SIMH_SIMCTL_FAILED"
         case bootStuck = "SIMH_BOOT_STUCK"
-        case slimFailed = "SIMH_SLIM_FAILED"
         case simslimMissing = "SIMH_SIMSLIM_MISSING"
         case workspaceBusy = "SIMH_WORKSPACE_BUSY"
         case unknownWorkspace = "SIMH_UNKNOWN_WORKSPACE"

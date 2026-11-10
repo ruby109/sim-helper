@@ -40,6 +40,10 @@ sim-helper release                         # 移除 worktree 前运行：停放�
 sim-helper prune                           # 清理 worktree 已不存在的状态，重试失败的删除
 sim-helper cache status
 sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在用时会拒绝
+
+sim-helper help [<command>]                # 或 `<command> --help`：选项、输出、错误码和示例
+sim-helper help errors                     # 所有错误码及处理方式
+sim-helper --version
 ```
 
 `build` 不会覆盖你已传入的 `-destination` 和 `-derivedDataPath`。
@@ -48,7 +52,29 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 
 ## 给 agent 的约定
 
-失败时返回稳定的错误码，加 `--json` 时输出 `{ok, code, message, remedy, available}`：
+**Claude Code skill。** `skills/sim-helper` 告诉 Claude 典型流程和错误处理方式。Homebrew 会一起安装它，链接到你的 skills 目录即可：
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s "$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper" ~/.claude/skills/sim-helper
+```
+
+只想对某个仓库启用的话，改链接到该项目的 `.claude/skills`。从源码安装时，用同样的方式链接 `skills/sim-helper`。
+
+**其他 agent。** 把下面这段粘贴到项目的 `AGENTS.md`：
+
+```markdown
+## iOS builds
+Use sim-helper for simulator builds and tests. Run every command inside your worktree with `--json`.
+- Once per worktree: `sim-helper sim acquire`
+- Build or test: `sim-helper build -- -scheme <Scheme> test`. Do not pass -destination or -derivedDataPath.
+- Before the worktree is removed: `sim-helper release`
+- On failure, branch on `code` and follow `remedy`. `sim-helper help <command>` and `sim-helper help errors` explain the rest.
+```
+
+**帮助。** `sim-helper help` 给出典型流程、命令、并发上限和环境变量。`help <command>` 列出单个命令的选项、输出字段、错误码和示例，`help errors` 列出所有错误码，两者都支持 `--json`。拼错时会给建议，例如 `Unknown command 'sim aquire'. Did you mean 'sim acquire'?`
+
+**错误码。** 失败时返回稳定的错误码，加 `--json` 时输出 `{ok, code, message, remedy, available}`：
 
 | 错误码 | 退出码 | 处理方式 |
 | --- | --- | --- |
@@ -62,7 +88,7 @@ sim-helper cache clear --if-over-gb 20     # 只能整体清空，有构建在�
 | `SIMH_DELETE_FAILED` | 1 | 记录已保留，运行 `prune` 重试 |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | 指定的版本或型号不可用，从 `available` 字段里选一个，或运行 `sim targets` |
 
-其他错误码见 `Sources/SimHelperCore/Errors.swift`。
+其他错误码见 `sim-helper help errors`。
 
 ## 行为
 
@@ -130,6 +156,8 @@ slim 只需做一次，含重启约 12s。内存占用是 `simslim measure` 给�
 ```sh
 swift test   # xcode-select 指向 CommandLineTools 时，需设置 DEVELOPER_DIR
 ```
+
+修改本仓库的 agent 请先读 [AGENTS.md](AGENTS.md)。
 
 没有做的部分：产物缓存和单飞构建、已合并 worktree 的自动判断、磁盘压力分级清理、worktree 预热。
 

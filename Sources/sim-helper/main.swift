@@ -1,30 +1,6 @@
 import Foundation
 import SimHelperCore
 
-let usage = """
-usage: sim-helper <command> [--json]
-
-  env                          Show this worktree's state paths and the toolchain
-  sim acquire [options]        Give this worktree its simulator, booted and verified
-      --device-type <name>     Identifier or name (default: newest iPhone Pro)
-      --runtime <version>      Identifier or version (default: newest iOS)
-      --no-boot                Allocate only
-      --no-slim                Skip SimSlim for this device
-      --slim-except <list>     Categories SimSlim keeps, e.g. push,storekit
-  sim targets                  Runtimes and device types acquire can be asked for
-  sim list                     Simulators this tool owns
-  build [--no-cache] -- <xcodebuild args>
-                               xcodebuild with this worktree's DerivedData and simulator
-                               and the shared compilation cache
-  cache status                 Size and whether a build is using it
-  cache clear [--if-over-gb N] Empty the cache; refused while a build uses it
-  release [path]               Park the worktree's simulator, delete its DerivedData
-  prune                        Release worktrees that no longer exist, retry deletes
-
-Results go to stdout, status and build output to stderr.
-Exit 75 (SIMH_COMPILATION_CACHE_CORRUPT): the cache was emptied; run the command again.
-"""
-
 func status(_ line: String) {
     FileHandle.standardError.write(Data((line + "\n").utf8))
 }
@@ -40,14 +16,18 @@ struct Arguments {
 
     mutating func option(_ name: String) throws -> String? {
         guard let i = values.firstIndex(of: name) else { return nil }
-        guard i + 1 < values.count else { throw HelperError(.usage, "\(name) needs a value.") }
+        guard i + 1 < values.count else { throw HelperError(.usage, "\(name) needs a value.", remedy: "Run `sim-helper help <command>` for its options.") }
         let value = values[i + 1]
         values.removeSubrange(i...(i + 1))
         return value
     }
 
-    func expectEmpty() throws {
-        if let extra = values.first { throw HelperError(.usage, "Unexpected argument: \(extra)\n\n\(usage)") }
+    func expectEmpty(_ command: String) throws {
+        guard let extra = values.first else { return }
+        let flags = (Help.command(command)?.options.map(\.flag) ?? []) + ["--json", "--help"]
+        let hint = Help.suggestion(for: extra, among: flags).map { " Did you mean '\($0)'?" } ?? ""
+        throw HelperError(.usage, "Unexpected argument '\(extra)' for \(command).\(hint)",
+                          remedy: "Run `sim-helper help \(command)` for its options.", available: flags)
     }
 }
 
@@ -96,12 +76,12 @@ func run(_ rawArguments: [String], json: Bool) throws {
     let cwd = FileManager.default.currentDirectoryPath
 
     var args = Arguments(values: rawArguments)
-    guard !args.values.isEmpty else { throw HelperError(.usage, usage) }
+    guard !args.values.isEmpty else { throw missingCommand(nil) }
     let command = args.values.removeFirst()
 
     switch command {
     case "env":
-        try args.expectEmpty()
+        try args.expectEmpty("env")
         let toolchain = Toolchain.detect(runner: runner)
         let workspace = try? Workspace.containing(cwd, runner: runner)
         let device = try devices.list().first { $0.workspace == workspace?.id && $0.state == .assigned }
@@ -127,7 +107,7 @@ func run(_ rawArguments: [String], json: Bool) throws {
         }
 
     case "sim":
-        guard !args.values.isEmpty else { throw HelperError(.usage, usage) }
+        guard !args.values.isEmpty else { throw missingCommand("sim") }
         switch args.values.removeFirst() {
         case "acquire":
             var options = AcquireOptions()
@@ -136,11 +116,11 @@ func run(_ rawArguments: [String], json: Bool) throws {
             options.slimExcept = try args.option("--slim-except")
             options.boot = !args.flag("--no-boot")
             options.slim = !args.flag("--no-slim")
-            try args.expectEmpty()
+            try args.expectEmpty("sim acquire")
             let device = try devices.acquire(try Workspace.containing(cwd, runner: runner), options)
             try emit(device, json: json) { $0.udid }
         case "targets":
-            try args.expectEmpty()
+            try args.expectEmpty("sim targets")
             let listing = listTargets(runtimes: try Simctl(runner: runner).runtimes())
             try emit(listing, json: json) { l in
                 l.runtimes.map { runtime -> String in
@@ -152,12 +132,12 @@ func run(_ rawArguments: [String], json: Bool) throws {
                 }.joined(separator: "\n")
             }
         case "list":
-            try args.expectEmpty()
+            try args.expectEmpty("sim list")
             try emit(DeviceList(devices: try devices.list()), json: json) { list in
                 list.devices.map { "\($0.udid)  \($0.name)  \($0.state.rawValue)  \($0.workspace ?? "-")" }.joined(separator: "\n")
             }
-        default:
-            throw HelperError(.usage, usage)
+        case let other:
+            throw unknownCommand(other, in: "sim")
         }
 
     case "build":
@@ -165,8 +145,8 @@ func run(_ rawArguments: [String], json: Bool) throws {
         var own = Arguments(values: Array(args.values[..<(split ?? args.values.endIndex)]))
         let xcodebuildArgs = split.map { Array(args.values[($0 + 1)...]) } ?? []
         let useCache = !own.flag("--no-cache")
-        try own.expectEmpty()
-        guard !xcodebuildArgs.isEmpty else { throw HelperError(.usage, "build needs xcodebuild arguments after --.") }
+        try own.expectEmpty("build")
+        guard !xcodebuildArgs.isEmpty else { throw HelperError(.usage, "build needs xcodebuild arguments after --.", remedy: "For example: sim-helper build -- -scheme App build") }
         let builder = Builder(paths: paths, runner: runner, devices: devices, log: status)
         let result = try builder.build(try Workspace.containing(cwd, runner: runner), xcodebuildArgs: xcodebuildArgs, useCache: useCache)
         if result.swiftTargetsWithoutExplicitModules > 0 {
@@ -178,31 +158,32 @@ func run(_ rawArguments: [String], json: Bool) throws {
         }
 
     case "cache":
-        guard !args.values.isEmpty else { throw HelperError(.usage, usage) }
+        guard !args.values.isEmpty else { throw missingCommand("cache") }
         let cache = CompilationCache(paths: paths)
         switch args.values.removeFirst() {
         case "status":
-            try args.expectEmpty()
+            try args.expectEmpty("cache status")
             try emit(try cache.status(), json: json) { "\($0.path)  \(gigabytes($0.bytes))\($0.inUse ? "  in use" : "")" }
         case "clear":
             let limit = try args.option("--if-over-gb").map { text -> Double in
                 guard let value = Double(text), value >= 0 else { throw HelperError(.usage, "--if-over-gb needs a number.") }
                 return value
             }
-            try args.expectEmpty()
+            try args.expectEmpty("cache clear")
             let before = try cache.status().bytes
             let over = limit.map { Double(before) > $0 * 1_000_000_000 } ?? true
             if over { try cache.clear() }
             try emit(CacheClearReport(cleared: over, bytes: before), json: json) { r in
                 r.cleared ? "emptied \(gigabytes(r.bytes))" : "kept \(gigabytes(r.bytes)), under the limit"
             }
-        default:
-            throw HelperError(.usage, usage)
+        case let other:
+            throw unknownCommand(other, in: "cache")
         }
 
     case "release":
-        let path = args.values.isEmpty ? nil : args.values.removeFirst()
-        try args.expectEmpty()
+        let path = args.values.first.map { $0.hasPrefix("-") ? nil : $0 } ?? nil
+        if path != nil { args.values.removeFirst() }
+        try args.expectEmpty("release")
         let workspace: Workspace
         if let path, !FileManager.default.fileExists(atPath: path) {
             // The worktree may already be removed, so git cannot be asked about it.
@@ -219,7 +200,7 @@ func run(_ rawArguments: [String], json: Bool) throws {
         }
 
     case "prune":
-        try args.expectEmpty()
+        try args.expectEmpty("prune")
         let report = cleaner.prune()
         try emit(report, json: json) { r in
             let lines = r.released.map { "released \($0.workspace)" + ($0.parked.map { ", parked \($0)" } ?? "") + $0.deleted.map { ", deleted \($0)" }.joined() }
@@ -230,11 +211,58 @@ func run(_ rawArguments: [String], json: Bool) throws {
         }
         if !report.failures.isEmpty { exit(1) }
 
-    case "help", "--help", "-h":
-        print(usage)
-
     default:
-        throw HelperError(.usage, "Unknown command \(command).\n\n\(usage)")
+        throw unknownCommand(command, in: nil)
+    }
+}
+
+func unknownCommand(_ word: String, in group: String?) -> HelperError {
+    // Match on the last word so `sim-helper aquire` still finds `sim acquire`.
+    let candidates: [(key: String, full: String)]
+    if let group {
+        candidates = (Help.groups[group] ?? []).map { ($0, "\(group) \($0)") }
+    } else {
+        candidates = Help.topLevel.map { ($0, $0) }
+            + Help.commands.map(\.command).filter { $0.contains(" ") }.map { (String($0.split(separator: " ")[1]), $0) }
+    }
+    let hint = Help.suggestion(for: word, among: candidates.map(\.key)).flatMap { key in candidates.first { $0.key == key }?.full }
+    let label = group.map { "\($0) \(word)" } ?? word
+    return HelperError(.usage, "Unknown command '\(label)'." + (hint.map { " Did you mean '\($0)'?" } ?? ""),
+                       remedy: "Run `sim-helper help\(group.map { " " + $0 } ?? "")` for the commands.",
+                       available: group.flatMap { Help.groups[$0] } ?? Help.topLevel)
+}
+
+func missingCommand(_ group: String?) -> HelperError {
+    guard let group else {
+        return HelperError(.usage, "No command given.", remedy: "Run `sim-helper help`.", available: Help.topLevel)
+    }
+    return HelperError(.usage, "\(group) needs a subcommand.", remedy: "Run `sim-helper help \(group)`.", available: Help.groups[group])
+}
+
+struct HelpOverview: Encodable {
+    struct Variable: Encodable { var name: String; var summary: String }
+    var version = Help.version
+    var commands = Help.commands
+    var environment = Help.environment.map { Variable(name: $0.name, summary: $0.summary) }
+    var errors = Help.errors
+}
+
+/// `help [words]` and `<words> --help`. Handled before Xcode is looked up, so it
+/// works on a machine without one.
+func printHelp(_ words: [String], json: Bool) throws {
+    let name = words.joined(separator: " ")
+    if words.isEmpty {
+        try emit(HelpOverview(), json: json) { _ in Help.overview }
+    } else if name == "errors" {
+        struct Errors: Encodable { var errors: [Help.ErrorEntry] }
+        try emit(Errors(errors: Help.errors), json: json) { _ in Help.errorsText }
+    } else if let command = Help.command(name) {
+        try emit(command, json: json) { Help.text($0) }
+    } else if words.count == 1, Help.groups[name] != nil {
+        struct Group: Encodable { var commands: [Help.Command] }
+        try emit(Group(commands: Help.commands.filter { $0.command.hasPrefix(name + " ") }), json: json) { _ in Help.groupText(name) }
+    } else {
+        throw unknownCommand(words.last!, in: words.count > 1 ? words[0] : nil)
     }
 }
 
@@ -245,8 +273,23 @@ let separator = arguments.values.firstIndex(of: "--") ?? arguments.values.endInd
 let json = arguments.values[..<separator].contains("--json")
 if let i = arguments.values[..<separator].firstIndex(of: "--json") { arguments.values.remove(at: i) }
 
+// Removing --json moved the separator.
+let own = arguments.values[..<(arguments.values.firstIndex(of: "--") ?? arguments.values.endIndex)]
+
 do {
-    try run(arguments.values, json: json)
+    if own.contains("--version") {
+        struct Version: Encodable { var version: String }
+        try emit(Version(version: Help.version), json: json) { "sim-helper \($0.version)" }
+    } else if own.first == "help" {
+        try printHelp(own.dropFirst().filter { !$0.hasPrefix("-") }, json: json)
+    } else if own.contains("--help") || own.contains("-h") {
+        try printHelp(Array(own.prefix { !$0.hasPrefix("-") }), json: json)
+    } else if own.isEmpty, !json {
+        status(Help.overview)
+        exit(64)
+    } else {
+        try run(arguments.values, json: json)
+    }
 } catch let error as HelperError {
     if json {
         struct Failure: Encodable { var ok = false; var code: String; var message: String; var remedy: String?; var available: [String]? }

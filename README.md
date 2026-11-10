@@ -40,6 +40,10 @@ sim-helper release                         # run before removing a worktree: par
 sim-helper prune                           # clean up state for worktrees that no longer exist, retry failed deletes
 sim-helper cache status
 sim-helper cache clear --if-over-gb 20     # clears the whole cache; refused while a build is using it
+
+sim-helper help [<command>]                # or `<command> --help`: options, output, errors, examples
+sim-helper help errors                     # every error code and what to do
+sim-helper --version
 ```
 
 `build` keeps any `-destination` or `-derivedDataPath` you pass.
@@ -48,7 +52,29 @@ Every command accepts `--json`. Results go to stdout; status and build output go
 
 ## For agents
 
-Failures return stable error codes. With `--json`, the output is `{ok, code, message, remedy, available}`:
+**Claude Code skill.** `skills/sim-helper` teaches Claude the workflow and how to handle errors. Homebrew installs it; link it into your skills directory:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s "$(brew --prefix sim-helper)/share/sim-helper/skills/sim-helper" ~/.claude/skills/sim-helper
+```
+
+Use a project's `.claude/skills` instead to enable it for one repo. From a checkout, link `skills/sim-helper` the same way.
+
+**Other agents.** Paste this into your project's `AGENTS.md`:
+
+```markdown
+## iOS builds
+Use sim-helper for simulator builds and tests. Run every command inside your worktree with `--json`.
+- Once per worktree: `sim-helper sim acquire`
+- Build or test: `sim-helper build -- -scheme <Scheme> test`. Do not pass -destination or -derivedDataPath.
+- Before the worktree is removed: `sim-helper release`
+- On failure, branch on `code` and follow `remedy`. `sim-helper help <command>` and `sim-helper help errors` explain the rest.
+```
+
+**Help.** `sim-helper help` gives the workflow, commands, limits, and environment variables. `help <command>` lists a command's options, output fields, errors, and examples, and `help errors` covers every error code. Both accept `--json`. Typos get a suggestion, such as `Unknown command 'sim aquire'. Did you mean 'sim acquire'?`
+
+**Errors.** Failures return stable error codes. With `--json`, the output is `{ok, code, message, remedy, available}`:
 
 | Code | Exit code | What to do |
 | --- | --- | --- |
@@ -62,7 +88,7 @@ Failures return stable error codes. With `--json`, the output is `{ok, code, mes
 | `SIMH_DELETE_FAILED` | 1 | The record was kept. Run `prune` to retry |
 | `SIMH_NO_RUNTIME` / `SIMH_NO_DEVICE_TYPE` | 1 | The requested version or model is unavailable. Pick one from `available`, or run `sim targets` |
 
-See `Sources/SimHelperCore/Errors.swift` for the other codes.
+`sim-helper help errors` lists the rest.
 
 ## Behavior
 
@@ -130,6 +156,8 @@ All tests passed, including the UI test on slimmed simulators. With 4, two acqui
 ```sh
 swift test   # set DEVELOPER_DIR when xcode-select points at the Command Line Tools
 ```
+
+Agents changing this repo should read [AGENTS.md](AGENTS.md).
 
 Not implemented: artifact caching and single-flight builds, detecting merged worktrees automatically, tiered cleanup under disk pressure, and worktree prewarming.
 

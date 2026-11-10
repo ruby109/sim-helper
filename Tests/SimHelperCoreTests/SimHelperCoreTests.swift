@@ -340,6 +340,15 @@ final class Sandbox {
         Builder(paths: box.paths, runner: box.runner, devices: box.manager())
     }
 
+    @Test func listPassesThroughWithoutWorktreeFlags() throws {
+        let box = Sandbox()
+        let a = try box.existingWorkspace("a")
+        let result = try builder(box).build(a, xcodebuildArgs: ["-list"])
+        let call = try #require(box.runner.calls.last { $0.count > 1 && $0[1] == "xcodebuild" && !$0.contains("-version") })
+        #expect(Array(call.dropFirst(2)) == ["-list"])
+        #expect(!result.compilationCache && result.udid == nil)
+    }
+
     @Test func corruptionEmptiesCacheAndExits75() throws {
         let box = Sandbox()
         let a = try box.existingWorkspace("a")
@@ -516,5 +525,36 @@ final class Sandbox {
         #expect(Workspace(root: "/a/repo").id == Workspace(root: "/a/repo").id)
         #expect(Workspace(root: "/a/repo").id != Workspace(root: "/b/repo").id)
         #expect(Workspace(root: "/a/my repo!").id.hasPrefix("my-repo--"))
+    }
+}
+
+@Suite struct HelpText {
+    @Test func errorReferenceCoversEveryCode() {
+        let documented = Set(Help.errors.map(\.code))
+        #expect(documented == Set(HelperError.Code.allCases.map(\.rawValue)))
+        for command in Help.commands {
+            #expect(Set(command.errors).isSubset(of: documented), "\(command.command)")
+        }
+    }
+
+    @Test func groupsAndTopLevelComeFromCommands() {
+        #expect(Help.groups["sim"] == ["acquire", "targets", "list"])
+        #expect(Help.groups["cache"] == ["status", "clear"])
+        #expect(Help.topLevel == ["env", "sim", "build", "cache", "release", "prune", "help"])
+    }
+
+    @Test func suggestsCloseMatchesOnly() {
+        #expect(Help.suggestion(for: "aquire", among: ["acquire", "targets", "list"]) == "acquire")
+        #expect(Help.suggestion(for: "bulid", among: Help.topLevel) == "build")
+        #expect(Help.suggestion(for: "--devce-type", among: ["--device-type", "--runtime"]) == "--device-type")
+        #expect(Help.suggestion(for: "deploy", among: Help.topLevel) == nil)
+    }
+
+    @Test func everyCommandHasUsageOutputAndExample() {
+        for command in Help.commands {
+            #expect(command.usage.hasPrefix("sim-helper \(command.command)"), "\(command.command)")
+            #expect(!command.output.isEmpty && !command.examples.isEmpty, "\(command.command)")
+            #expect(command.options.allSatisfy { $0.flag.hasPrefix("--") }, "\(command.command)")
+        }
     }
 }

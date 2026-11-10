@@ -31,8 +31,10 @@ public struct Builder {
         try workspace.record(in: paths)
 
         var args = xcodebuildArgs
+        // -list builds nothing, and xcodebuild rejects -derivedDataPath without a scheme.
+        let listing = args.contains("-list")
         let derivedData = value(of: "-derivedDataPath", in: args) ?? workspace.derivedData(in: paths)
-        if value(of: "-derivedDataPath", in: args) == nil { args = ["-derivedDataPath", derivedData] + args }
+        if value(of: "-derivedDataPath", in: args) == nil, !listing { args = ["-derivedDataPath", derivedData] + args }
         var udid: String?
         if !hasDestination(args) {
             // xcodebuild boots what it needs, so skip the slower readiness checks.
@@ -43,7 +45,7 @@ public struct Builder {
 
         let cache = CompilationCache(paths: paths)
         let toolchain = Toolchain.detect(runner: runner)
-        let caching = useCache && toolchain.supportsCompilationCache
+        let caching = useCache && !listing && toolchain.supportsCompilationCache
         var claim = caching ? try cache.claim() : nil
         defer { claim?.release() }
         if caching {
